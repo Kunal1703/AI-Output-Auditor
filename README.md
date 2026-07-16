@@ -270,7 +270,14 @@ auditor/
 │   │   │   ├── context.py          # SharedContext — single source of truth
 │   │   │   ├── text_segmentation.py# sentences, paragraphs, locatable spans
 │   │   │   ├── document_analysis.py# statistics + metadata (facts, not verdicts)
-│   │   │   ├── extraction/         # Doc 2 §5.1 — requirements · claims
+│   │   │   ├── vocabularies.py     # Doc 2 §6.4 — the frozen verdict sets
+│   │   │   ├── llm_stage.py        # shared: render prompt → call → parse
+│   │   │   ├── extraction/         # §5.1 — requirements · claims · key points · citations
+│   │   │   ├── classification/     # §5.2 — hard/soft · claim type · centrality
+│   │   │   │                       #        salience · category/severity · source class
+│   │   │   ├── verification/       # §5.4 — the four judges
+│   │   │   ├── mapping.py          # Credibility stage 3 — claim → citation
+│   │   │   ├── scoring.py          # §5.9 — shared scoring arithmetic
 │   │   │   ├── evidence_pipeline.py# collector · link check · formatters
 │   │   │   ├── llm_service.py      # retries, timeouts, JSON policy
 │   │   │   ├── llm_providers/      # base · groq (active) · openrouter (gated)
@@ -321,9 +328,11 @@ auditor/
 ├── config/
 │   ├── settings.yaml               # thresholds, weights, models
 │   └── prompts/                    # one dir per engine; <stage>.<version>.md
-│       ├── relevance/requirement_extraction.v1.md
-│       ├── accuracy/claim_extraction.v1.md
-│       └── {coverage,credibility,novelty,readability,engagement,diversity}/
+│       ├── accuracy/              # extraction · classification · centrality · verification
+│       ├── credibility/           # extraction · mapping · grounding · source class
+│       ├── relevance/             # extraction · classification · evaluation
+│       ├── coverage/              # extraction · salience · category/severity · verification
+│       └── {novelty,readability,engagement,diversity}/   # Milestone 4
 ├── datasets/                       # validation fixtures (good/medium/poor)
 └── docs/                           # Documents 1–4
 ```
