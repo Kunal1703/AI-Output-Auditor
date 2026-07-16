@@ -1,0 +1,27 @@
+# AI Trust & Quality Auditor — backend dependencies (Document 4, §2).
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0
+python-dotenv>=1.0                # flat .env names (GROQ_API_KEY, LLM_MODEL…)
+httpx>=0.27,<1.0
+PyYAML>=6.0,<7.0
+python-multipart>=0.0.12          # POST /audit/file multipart parsing
+
+# Shared preprocessing — language detection for document metadata.
+# The detected language is a *fact* about the document. Checking it against a
+# requested language is Relevance's stage 7 (Document 2, §7.1), not this.
+# Imported lazily and failure-tolerant: absent it, language reports None rather
+# than a wrong guess.
+langdetect>=1.0.9
+
+# Shared Embedding Service — Relevance scope drift, Novelty duplicate detection
+# (Document 2, §5.5). Local, so embedding costs no per-call latency and no
+# per-call fee (Document 4, §2).
+#
+# Heads-up: this pulls in torch. The install is large (~2GB) and takes a few
+# minutes. The backend does not import it at startup — the model is loaded
+# lazily on first embed — so the scaffold still boots in a second, and it boots
+# even if this install is skipped.
+sentence-transformers>=3.0,<4.0

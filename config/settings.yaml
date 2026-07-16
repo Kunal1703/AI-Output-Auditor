@@ -1,0 +1,96 @@
+# AI Trust & Quality Auditor — runtime tunables.
+#
+# Document 3 treats thresholds and weights as deployment configuration; the
+# reasoning rules themselves are fixed in code. Document 4 §4 designates this
+# file as the single source of tunables served by the Configuration Manager.
+#
+# Nothing in this file changes frozen behavior. It only parameterizes it.
+
+version: "1.0"
+
+llm:
+  # Active provider. See backend/app/shared/llm_providers/ for the abstraction.
+  # Override with LLM_PROVIDER / LLM_MODEL in .env — the environment wins.
+  #
+  # A paid provider (OpenRouter) is written and ships commented out in
+  # llm_providers/registry.py. To switch: uncomment the PAID PROVIDER blocks
+  # there, then set LLM_PROVIDER=openrouter and an OpenRouter-qualified
+  # LLM_MODEL, and clear reasoning_format below (it is Groq-specific).
+  provider: "groq"
+  model: "qwen/qwen3-32b"
+  temperature: 0.0
+  max_tokens: 4096
+  timeout_seconds: 60
+  max_retries: 3
+  retry_backoff_seconds: 1.5
+
+  # Groq-only. qwen3-32b is a reasoning model: left alone it emits a <think>
+  # block that corrupts the structured JSON the engine pipelines parse.
+  # "hidden" suppresses it. Set to null for any non-reasoning model or any
+  # other provider — they reject the parameter.
+  reasoning_format: "hidden"
+
+embedding:
+  provider: "local"
+  model: "all-MiniLM-L6-v2"
+  batch_size: 32
+
+  # Shared embedding cache (Document 4, §12 names caching embeddings as a
+  # reliability measure). Application-scoped, so Relevance and Novelty share
+  # one entry for the same text rather than each paying to embed it.
+  cache_enabled: true
+  cache_max_entries: 20000
+
+retrieval:
+  fetch_timeout_seconds: 20
+  max_retries: 2
+  chunk_size: 800
+  chunk_overlap: 120
+  top_k: 5
+  external_retrieval_enabled: false
+
+prompts:
+  directory: "config/prompts"
+  strict_rendering: true
+
+orchestrator:
+  # Per-engine wall-clock budget. A timed-out engine yields a degraded,
+  # low-confidence AuditResult rather than crashing the run (Document 4 §12).
+  engine_timeout_seconds: 120
+  max_parallel_engines: 8
+
+decision:
+  # Severity at or above which a single Critical Finding gates trust to
+  # Untrusted, non-compensatorily (Document 3 §5).
+  trust_blocking_severity: "high"
+
+  # Minimum confidence required on a trust-relevant dimension before a
+  # favorable Trust Verdict may be asserted. Below this, the run routes to
+  # Unable to Verify (Document 3 §8).
+  min_trust_confidence: 0.60
+
+  # Score floor a trust-relevant dimension must clear to count as passing.
+  # Trust is bounded by the weakest trust-relevant dimension (Document 3 §6).
+  trust_dimension_pass_threshold: 0.70
+  trust_caveat_threshold: 0.85
+
+  # Quality Verdict banding over the confidence-weighted quality score
+  # (Document 3 §7).
+  quality_bands:
+    high: 0.80
+    adequate: 0.60
+
+  # Configurable per-dimension weights for the compensatory Quality
+  # Verdict. N/A dimensions are excluded from numerator and denominator
+  # entirely (Document 3 §9) rather than reweighted here.
+  quality_weights:
+    Relevance: 1.0
+    Coverage: 1.0
+    Novelty: 0.75
+    Readability: 1.0
+    Engagement: 0.75
+    Diversity: 0.5
+
+jobs:
+  retention_seconds: 3600
+  max_concurrent_audits: 4

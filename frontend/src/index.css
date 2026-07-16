@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Global styles.
+ *
+ * The palette is dark by default: the reports are dense, evidence-heavy
+ * documents that people read for a while, and the verdict and severity colors
+ * carry meaning that reads more clearly against a dark surface.
+ */
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-slate-950 font-sans text-slate-200 antialiased;
+  }
+
+  /* Keyboard focus must stay visible. The report is a review tool, and
+     reviewers navigate long evidence lists by keyboard. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-trust-500 ring-offset-2 ring-offset-slate-950;
+  }
+}
