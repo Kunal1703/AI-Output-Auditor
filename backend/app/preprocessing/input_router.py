@@ -17,8 +17,9 @@ content is the Engine Input Contract (Document 2, §6.1); the context adds the
 run id and the shared derivation store that lets engines reuse expensive work
 instead of each recomputing it.
 
-Milestone 1 ships the interface and a complete text path. URL and file routing
-land in Milestone 2 with the extractors they depend on.
+All three paths are complete: text needs no extraction, URL and file delegate
+to the content extractor. **Routing never evaluates** (Document 4, §5) — it
+decides which extractor runs and hands the result on.
 """
 
 from __future__ import annotations
@@ -147,15 +148,36 @@ class DefaultInputRouter(InputRouter):
         reference_source: str | None = None,
         options: dict[str, Any] | None = None,
     ) -> SharedContext:
-        """Fetch, extract, and normalize a URL.
+        """Fetch, extract, and normalize a URL. See :meth:`InputRouter.from_url`.
+
+        The extractor's provenance is carried into ``extraction_metadata`` and
+        surfaces through ``context.metadata.extra``. That matters when a report
+        is surprising: "Readability found no headings" reads very differently
+        once you know BeautifulSoup produced the text after trafilatura
+        declined, and the only way to know is to record it here.
 
         Raises:
-            NotImplementedError: Until Milestone 2, with the content extractor.
+            ExtractionError: The page could not be fetched or yielded no usable
+                text.
+            UnsupportedInputError: The string is not an http(s) URL.
         """
-        raise NotImplementedError(
-            "URL routing is implemented in Milestone 2, with the content "
-            "extractor it depends on."
+        extracted = await self._extractor.from_url(url)
+        content = PreprocessedContent(
+            content_id=self._content_id(),
+            ai_output=extracted.text,
+            prompt=prompt.strip() if prompt else None,
+            reference_source=reference_source.strip() if reference_source else None,
+            input_type=InputType.URL,
+            source_uri=extracted.source_uri,
+            options=dict(options or {}),
+            extraction_metadata={
+                "extractor": extracted.extractor,
+                "character_count": len(extracted.text),
+                "title": extracted.title,
+                **extracted.metadata,
+            },
         )
+        return SharedContext.build(audit_id, content)
 
     async def from_file(
         self,
@@ -167,12 +189,28 @@ class DefaultInputRouter(InputRouter):
         reference_source: str | None = None,
         options: dict[str, Any] | None = None,
     ) -> SharedContext:
-        """Extract and normalize an uploaded file.
+        """Extract and normalize an uploaded file. See :meth:`InputRouter.from_file`.
 
         Raises:
-            NotImplementedError: Until Milestone 2, with the content extractor.
+            UnsupportedInputError: The format is not supported, or the upload
+                exceeds the size limit.
+            ExtractionError: The file was corrupt, empty, or yielded no text —
+                a scanned PDF with no text layer being the common case.
         """
-        raise NotImplementedError(
-            "File routing is implemented in Milestone 2, with the content "
-            "extractor it depends on."
+        extracted = await self._extractor.from_file(filename, data, content_type)
+        content = PreprocessedContent(
+            content_id=self._content_id(),
+            ai_output=extracted.text,
+            prompt=prompt.strip() if prompt else None,
+            reference_source=reference_source.strip() if reference_source else None,
+            input_type=InputType.FILE,
+            source_uri=extracted.source_uri,
+            options=dict(options or {}),
+            extraction_metadata={
+                "extractor": extracted.extractor,
+                "character_count": len(extracted.text),
+                "title": extracted.title,
+                **extracted.metadata,
+            },
         )
+        return SharedContext.build(audit_id, content)

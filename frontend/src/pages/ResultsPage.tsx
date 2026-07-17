@@ -14,6 +14,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import ReportPanel from '@/components/ReportPanel';
 import LoadingState from '@/components/LoadingState';
 import { ApiError, getReport } from '@/api/client';
+import { exportJson, exportMarkdown } from '@/api/export';
 import type { AuditReport } from '@/api/types';
 
 /** The results dashboard. */
@@ -92,14 +93,22 @@ export default function ResultsPage() {
             {report.audit_id} · {new Date(report.generated_at).toLocaleString()}
           </p>
         </div>
-        <button
-          type="button"
-          disabled
-          title="Export lands in Milestone 2, with the evidence it exports."
-          className="rounded border border-slate-800 px-4 py-2 text-sm text-slate-600"
-        >
-          Export report
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => exportMarkdown(report)}
+            className="rounded border border-slate-700 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-600 hover:text-slate-100"
+          >
+            Export Markdown
+          </button>
+          <button
+            type="button"
+            onClick={() => exportJson(report)}
+            className="rounded border border-slate-700 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-600 hover:text-slate-100"
+          >
+            Export JSON
+          </button>
+        </div>
       </header>
 
       <ReportPanel report={report} />

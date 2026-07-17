@@ -241,6 +241,26 @@ class LLMJudge(LLMStage, Generic[UnitT, VerdictT]):
             self._prompt_variables(units_json, evidence_block, **kwargs),
             self._response_schema(),
         )
+        return self.build_judgments(units, records)
+
+    def build_judgments(
+        self, units: Sequence[UnitT], records: Sequence[dict[str, Any]]
+    ) -> tuple[Judgment[UnitT, VerdictT], ...]:
+        """Match the model's records to units by id and build the judgments.
+
+        Split out of :meth:`judge` so a stage whose frozen output is *more than*
+        a verdict per unit can reuse the matching, vocabulary enforcement, and
+        unjudged-unit handling rather than reimplement them. Readability's stage
+        3 is the case: Document 2 §7.6 has it review Clarity, Coherence, and
+        Structure *and* surface the issues behind those verdicts, in one pass.
+
+        Args:
+            units: The units judged, in their original order.
+            records: The model's records, each keyed by an ``id``.
+
+        Returns:
+            One :class:`Judgment` per unit, in the original order.
+        """
         indexed = index_by(records, "id")
 
         judgments: list[Judgment[UnitT, VerdictT]] = []

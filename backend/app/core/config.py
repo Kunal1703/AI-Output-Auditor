@@ -56,6 +56,10 @@ __all__ = [
     "CredibilityEngineSettings",
     "RelevanceEngineSettings",
     "CoverageEngineSettings",
+    "ReadabilityEngineSettings",
+    "NoveltyEngineSettings",
+    "EngagementEngineSettings",
+    "DiversityEngineSettings",
     "EngineSettings",
     "JobSettings",
     "Settings",
@@ -365,6 +369,247 @@ class CoverageEngineSettings(BaseModel):
     )
 
 
+class ReadabilityEngineSettings(BaseModel):
+    """Tunables for the Readability engine (Document 2, §7.6).
+
+    The heuristic bounds are the ones the Deterministic Analysis stage measures
+    against. They are *bounds a measurement is compared to*, never verdicts: the
+    engine's stage 3 review decides what exceeding one means, and the score
+    weights that review three times as heavily as these.
+    """
+
+    max_mean_sentence_words: float = Field(
+        default=25.0,
+        gt=0,
+        description="Mean sentence length above which the check flags. Ordinary "
+        "professional prose runs 15–25 words.",
+    )
+    max_sentence_words: float = Field(
+        default=45.0,
+        gt=0,
+        description="Length of a single sentence above which the check flags.",
+    )
+    min_reading_ease: float = Field(
+        default=30.0,
+        description="Flesch reading-ease floor. Below ~30 is dense academic "
+        "register. Set low deliberately: technical content is legitimately "
+        "dense, and a stricter floor would flag every engineering document.",
+    )
+    max_grade_level: float = Field(
+        default=14.0,
+        gt=0,
+        description="Flesch-Kincaid grade-level bound.",
+    )
+    max_paragraph_words: float = Field(
+        default=150.0,
+        gt=0,
+        description="Paragraph length above which the check flags.",
+    )
+    structure_required_above_words: float = Field(
+        default=400.0,
+        gt=0,
+        description="Word count above which the absence of headings, lists, or "
+        "tables is worth reporting. Below it, a short answer needs no "
+        "navigation and faulting it for having none would fault it for being "
+        "short.",
+    )
+    min_words_for_review: int = Field(
+        default=25,
+        gt=0,
+        description="Below this the output is too short to assess for coherence "
+        "or structure, and the engine reports a neutral score with low "
+        "confidence rather than a verdict it could not reach.",
+    )
+    words_for_full_confidence: int = Field(
+        default=150,
+        gt=0,
+        description="Word count at which the content-sufficiency confidence "
+        "signal saturates.",
+    )
+    expected_check_count: int = Field(
+        default=8,
+        gt=0,
+        description="Deterministic checks a healthy run produces, used to scale "
+        "the checks-ran confidence signal. Fewer means a library was "
+        "unavailable and the analysis is thinner than designed.",
+    )
+
+    def thresholds(self) -> dict[str, float]:
+        """Project the heuristic bounds for ``validators.analyze_readability``.
+
+        Only the bounds — the confidence and gating knobs above are the engine's
+        own business, and the validator has no use for them.
+        """
+        return {
+            "max_mean_sentence_words": self.max_mean_sentence_words,
+            "max_sentence_words": self.max_sentence_words,
+            "min_reading_ease": self.min_reading_ease,
+            "max_grade_level": self.max_grade_level,
+            "max_paragraph_words": self.max_paragraph_words,
+            "structure_required_above_words": self.structure_required_above_words,
+        }
+
+
+class NoveltyEngineSettings(BaseModel):
+    """Tunables for the Novelty engine (Document 2, §7.5)."""
+
+    semantic_threshold: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description="Relatedness above which two segments become a redundancy "
+        "*candidate* — never a finding; stage 6 decides. **Raw cosine** (see "
+        "embedding_service.relatedness), not rescaled from [-1,1]. Measured on "
+        "this model: genuine padding scores 0.66–0.94, a genuine recap 0.72, "
+        "and merely same-topic sentences 0.56 and below — so the separation "
+        "sits at ~0.60. A higher bar misses real restatement; the review is "
+        "what clears the false positives a lower bar admits.",
+    )
+    literal_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Token-overlap (Jaccard) floor at which two segments count "
+        "as literal duplicates, catching a near-verbatim repeat that differs by "
+        "an article. A literal duplicate becomes a candidate regardless of its "
+        "embedding similarity.",
+    )
+    min_segment_words: int = Field(
+        default=5,
+        gt=0,
+        description="Segments shorter than this are not compared. 'Yes.' is "
+        "similar to everything and redundant with nothing.",
+    )
+    max_candidates: int = Field(
+        default=25,
+        gt=0,
+        description="Ceiling on candidate pairs sent to the review, worst first. "
+        "A pathologically repetitive text could otherwise blow the engine "
+        "timeout and degrade the dimension to nothing at all.",
+    )
+    coverage_match_threshold: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="Relatedness at which a redundant segment counts as "
+        "restating a Coverage key point and is rescued as functional "
+        "repetition. Raw cosine, same scale as semantic_threshold. Set below it "
+        "on purpose: a recap paraphrases a key point rather than echoing it, so "
+        "requiring near-identity here would defeat the rescue.",
+    )
+    coverage_salience_floor: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description="Salience a Coverage key point must carry before repetition "
+        "of it counts as functional. Repeating a peripheral detail is padding "
+        "however faithfully it tracks the source.",
+    )
+    words_for_full_confidence: int = Field(
+        default=120,
+        gt=0,
+        description="Word count at which the content-sufficiency confidence "
+        "signal saturates.",
+    )
+
+
+class EngagementEngineSettings(BaseModel):
+    """Tunables for the Engagement engine (Document 2, §7.7)."""
+
+    manipulation_penalty: dict[str, float] = Field(
+        default_factory=lambda: {
+            "critical": 0.35,
+            "high": 0.25,
+            "medium": 0.12,
+            "low": 0.05,
+            "info": 0.0,
+        },
+        description="Score penalty per confirmed manipulation item, by the "
+        "pattern's severity. Subtracted rather than averaged: content that "
+        "manipulates its reader has done something wrong that being useful does "
+        "not excuse, and averaging would let a high fitness score dilute it.",
+    )
+    borderline_penalty_factor: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of the penalty a *Borderline* item carries. Pushy "
+        "phrasing is a real cost and a smaller one than deception; a factor of "
+        "0 would make the middle verdict meaningless and 1 would make it a "
+        "synonym for Manipulative.",
+    )
+
+    @model_validator(mode="after")
+    def _penalties_cover_severities(self) -> "EngagementEngineSettings":
+        missing = {s.value for s in Severity} - set(self.manipulation_penalty)
+        if missing:
+            raise ValueError(
+                "engagement.manipulation_penalty must define a penalty for every "
+                f"severity; missing: {sorted(missing)}"
+            )
+        return self
+
+
+class DiversityEngineSettings(BaseModel):
+    """Tunables for the Diversity engine (Document 2, §7.8).
+
+    Note:
+        There is no threshold here for *applicability*. Whether the dimension
+        applies is a judgment made by stage 2 against the criteria in its prompt,
+        not a number to tune — and a configurable applicability gate would let a
+        deployment quietly switch the only N/A in the system on or off.
+    """
+
+    perspective_similarity_threshold: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="Relatedness floor for a reference passage to count as a "
+        "retrieved perspective. **Raw cosine** (see relatedness), not rescaled. "
+        "Set lower than Accuracy's evidence floor on purpose: a passage arguing "
+        "a position the output never took is topically distant from the topic "
+        "sentence by construction, and a strict floor would retrieve only the "
+        "perspectives the output already holds.",
+    )
+    perspective_top_k: int = Field(
+        default=6, gt=0, description="Reference passages retrieved per audit."
+    )
+    max_sources_fetched: int = Field(
+        default=6,
+        gt=0,
+        description="Ceiling on external fetches, and only when the request "
+        "opted into external retrieval.",
+    )
+    source_excerpt_chars: int = Field(
+        default=3000,
+        gt=0,
+        description="Characters of a fetched source shown to viewpoint "
+        "extraction.",
+    )
+    bias_penalty: dict[str, float] = Field(
+        default_factory=lambda: {
+            "critical": 0.30,
+            "high": 0.20,
+            "medium": 0.10,
+            "low": 0.04,
+            "info": 0.0,
+        },
+        description="Score penalty per detected bias item, by severity. "
+        "Subtracted rather than averaged: loaded framing is a fault that naming "
+        "every viewpoint does not offset.",
+    )
+
+    @model_validator(mode="after")
+    def _penalties_cover_severities(self) -> "DiversityEngineSettings":
+        missing = {s.value for s in Severity} - set(self.bias_penalty)
+        if missing:
+            raise ValueError(
+                "diversity.bias_penalty must define a penalty for every "
+                f"severity; missing: {sorted(missing)}"
+            )
+        return self
+
+
 class EngineSettings(BaseModel):
     """Per-engine tunables, grouped."""
 
@@ -374,6 +619,14 @@ class EngineSettings(BaseModel):
     )
     relevance: RelevanceEngineSettings = Field(default_factory=RelevanceEngineSettings)
     coverage: CoverageEngineSettings = Field(default_factory=CoverageEngineSettings)
+    readability: ReadabilityEngineSettings = Field(
+        default_factory=ReadabilityEngineSettings
+    )
+    novelty: NoveltyEngineSettings = Field(default_factory=NoveltyEngineSettings)
+    engagement: EngagementEngineSettings = Field(
+        default_factory=EngagementEngineSettings
+    )
+    diversity: DiversityEngineSettings = Field(default_factory=DiversityEngineSettings)
 
 
 class JobSettings(BaseModel):

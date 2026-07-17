@@ -19,14 +19,14 @@ the client poll, because a real run makes many LLM calls and would otherwise
 hold a connection open for minutes. Both exist in the frozen design; neither
 replaces the other.
 
-**Milestone status.** The job lifecycle, progress reporting, and report
-retrieval are complete and exercisable end-to-end today. What they carry is
-:func:`build_placeholder_report` — a report that measures nothing and says so.
-Milestone 2 replaces the one call in :func:`_run_audit` with the orchestrator
-and Decision Engine; no route signature changes.
+**Milestone status.** Complete. :func:`_run_audit` runs the eight engines
+through the orchestrator, hands the results to the Decision Engine, and stores
+the Final Audit Report. Progress reflects real engine completion.
 """
 
 from __future__ import annotations
+
+import asyncio
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
 
@@ -43,7 +43,7 @@ from app.api.models import (
 from app.app import ServiceContainer
 from app.core.errors import AuditorError
 from app.core.logging import bind, get_logger
-from app.decision_engine.report_builder import build_placeholder_report
+from app.decision_engine.report_builder import build_report
 from app.shared.context import SharedContext
 from app.shared.schemas import AuditReport
 
@@ -62,16 +62,16 @@ async def _run_audit(
 ) -> None:
     """Execute one audit in the background and store its report.
 
-    **This function is the Milestone 2 seam.** Today it produces the placeholder
-    report. The full implementation replaces that single line with::
+    Measure, decide, present — the three layers of Document 1 §3, in the only
+    place they meet. The orchestrator runs the eight engines in their frozen
+    waves; the Decision Engine interprets the eight results; the report builder
+    projects the outcome. **This function contains no audit or decision logic
+    of its own** (Document 4, §5) — it wires three calls together and owns the
+    job lifecycle.
 
-        orchestrator = container.orchestrator(audit_id)
-        results = await orchestrator.run(context, on_progress=...)
-        decision = container.decision_engine.decide(list(results.values()))
-        report = build_report(audit_id, decision, list(results.values()), ...)
-
-    Nothing else in the API changes: the job lifecycle, the progress callback,
-    and the retrieval path are already what the real run needs.
+    Progress is reported from the orchestrator's own callback as each engine
+    finishes, so ``GET /audit/{id}/status`` reflects what actually completed
+    rather than a timer (Document 4, §8).
 
     Args:
         audit_id: The job's id.
@@ -81,8 +81,22 @@ async def _run_audit(
     """
     await jobs.mark_processing(audit_id)
     try:
-        report = build_placeholder_report(
+        orchestrator = container.orchestrator(audit_id)
+
+        def on_progress(completed: int, total: int, dimension: str) -> None:
+            # The orchestrator's callback is synchronous and must never fail an
+            # audit, so the async store update is scheduled rather than awaited.
+            # EngineOrchestrator._report already swallows anything this raises.
+            asyncio.create_task(jobs.record_engine_completed(audit_id, dimension))
+
+        results = await orchestrator.run(context, on_progress=on_progress)
+        ordered = list(results.values())
+
+        decision = container.decision_engine.decide(ordered)
+        report = build_report(
             audit_id=audit_id,
+            decision=decision,
+            dimension_results=ordered,
             input_type=context.input_type,
             source_uri=context.source_uri,
         )
@@ -122,13 +136,12 @@ async def audit(
             synchronous report carries the same id space as an async one.
 
     Returns:
-        The Final Audit Report.
+        The Final Audit Report — a real audit: eight engines measured, the
+        Decision Engine interpreted, every verdict traceable to evidence.
 
     Note:
-        Returns the Milestone 1 placeholder report — every dimension unmeasured,
-        zero confidence, verdict *Unable to Verify*. That verdict is the honest
-        answer while nothing has been measured, not a stub value; see
-        :func:`~app.decision_engine.report_builder.build_placeholder_report`.
+        Synchronous, so it holds the connection for the length of a full run.
+        Prefer ``POST /audit/text`` and polling for anything interactive.
     """
     job = await jobs.create()
     if request.text:

@@ -689,6 +689,16 @@ class AuditReport(_Base):
         "verbatim so the frontend can drill from any verdict into the ledger "
         "and evidence that produced it.",
     )
+    dimension_summaries: list[DimensionSummary] = Field(
+        default_factory=list,
+        description="The flat per-dimension rows of Document 3 §12's Dimension "
+        "Results section: dimension, type, score (or N/A with reason), "
+        "confidence, and a one-line rationale. Carried alongside "
+        "``dimension_results`` rather than derived from it because the rationale "
+        "is the Decision Engine's one-line reading of what the engine reported, "
+        "and §12 requires the report to state it. N/A dimensions appear here "
+        "explicitly as excluded rather than being omitted.",
+    )
     recommendations: list[PrioritizedRecommendation] = Field(default_factory=list)
     input_type: InputType = InputType.TEXT
     source_uri: str | None = None

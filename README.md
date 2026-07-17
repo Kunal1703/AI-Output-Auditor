@@ -4,7 +4,9 @@ Evaluates AI-generated content and returns a complete, evidence-backed audit: **
 
 The output is never just a number. It is a verdict with evidence, confidence, critical findings, and prioritized recommendations.
 
-> **Milestone 1 — engineering foundation.** The full architecture, every contract, and the runnable stack are in place. The eight audit engines and the Decision Engine workflow land in Milestone 2, so **every audit currently returns `Unable to Verify` with nothing measured**. That is the honest verdict for a system that has checked nothing — see [Milestone status](#milestone-status).
+> **👉 Continuing this build? Start with [`docs/HANDOFF.md`](docs/HANDOFF.md)** — the complete engineering handoff and single source of truth. It assumes zero prior context and tells you exactly where to pick up.
+
+> **Complete.** All eight audit engines measure, the Decision Engine turns their results into a two-axis verdict, and the API serves a real, evidence-backed Final Audit Report. Text, URL, and file input all work. **Add a `GROQ_API_KEY` to run a real audit** — without one every dimension degrades and the audit returns `Unable to Verify`, which is the honest verdict for a system that could not check anything.
 
 ---
 
@@ -49,39 +51,58 @@ Eight independent audit engines each measure one dimension:
 
 ## Quick start
 
-**Prerequisites:** Python 3.11+ and Node 18+.
+Two ways to run it. **Docker is the shortest path**; the local install is what you want for development.
 
-### Backend
+### Option A — Docker (recommended)
+
+**Prerequisite:** Docker with Compose v2.
 
 ```bash
+git clone <this-repo> && cd auditor
+
+cp backend/.env.example backend/.env     # then add your GROQ_API_KEY
+docker compose up --build
+```
+
+- Frontend → **http://localhost:5173**
+- Backend  → **http://127.0.0.1:8000/docs**
+
+The first build installs torch and bakes the embedding model into the image, so
+expect several minutes and a large backend image. Every build after is cached.
+
+`docker compose up` works **without** a `.env` too — the stack starts, `/health`
+reports `llm_configured: false`, and every audit returns *Unable to Verify*.
+That is the honest answer for an auditor that cannot reach a model, not a crash.
+
+### Option B — local
+
+**Prerequisites:** Python 3.11+ and Node 18+.
+
+```bash
+# ---- backend ----
 cd backend
 python -m venv .venv
 
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
+.venv\Scriptsctivate            # Windows
+source .venv/bin/activate          # macOS / Linux
 
-pip install -r requirements.txt   # pulls torch via sentence-transformers; a few minutes
+pip install -r requirements-m2.txt  # includes requirements.txt; pulls torch — a few minutes
 
-cp .env.example .env      # then add your Groq key (optional in Milestone 1)
-
+cp .env.example .env                # then add your Groq key
 uvicorn app.main:app --reload
 ```
 
-Backend runs at **http://127.0.0.1:8000** — interactive API docs at **/docs**.
-
-### Frontend
-
 ```bash
+# ---- frontend (a second terminal) ----
 cd frontend
 npm install
 npm run dev
 ```
 
-Frontend runs at **http://localhost:5173** and proxies `/api` to the backend.
+- Backend  → **http://127.0.0.1:8000** (docs at `/docs`)
+- Frontend → **http://localhost:5173** (proxies `/api` to the backend)
 
-### Verify
+### Verify the install
 
 ```bash
 curl http://127.0.0.1:8000/health
@@ -89,12 +110,38 @@ curl http://127.0.0.1:8000/health
 
 ```json
 { "status": "ok", "llm_provider": "groq", "llm_model": "qwen/qwen3-32b",
-  "version": "1.0", "llm_configured": false, "llm_reachable": false,
-  "engines_registered": 8, "embedding_model": "all-MiniLM-L6-v2",
+  "version": "1.0", "llm_configured": true, "llm_reachable": true,
+  "engines_registered": 8, "prompt_templates": 27,
+  "embedding_model": "all-MiniLM-L6-v2",
   "embedding_cache_enabled": true, "embedding_cache_hit_rate": 0.0 }
 ```
 
-`engines_registered: 8` confirms all eight engines registered at startup. `llm_configured: false` is expected until you add a key — the Navbar shows this as a status dot, because a backend that cannot reach its provider will degrade every trust dimension and return *Unable to Verify* for everything. That is correct behavior, but you should be able to see *why*.
+`engines_registered: 8` and `prompt_templates: 27` confirm the system wired up.
+`llm_configured: false` means no key — the Navbar shows it as a status dot,
+because a backend that cannot reach its provider degrades every trust dimension
+and returns *Unable to Verify* for everything. That is correct behavior, but you
+should be able to see **why**.
+
+Then paste some text at **http://localhost:5173/audit** and watch the eight
+engines report real progress.
+
+### Run the tests
+
+```bash
+cd backend
+pytest                      # the full suite; no API key or network needed
+```
+
+### Run the validation corpus
+
+Proves the central claim — that the auditor separates good content from bad
+(Document 4, §11). **Needs a real key**, because it needs real measurements:
+
+```bash
+cd backend
+python -m app.evaluation.calibrate            # prints the results table
+python -m app.evaluation.calibrate --json out.json   # + full reports
+```
 
 ---
 
@@ -305,7 +352,8 @@ auditor/
 │   │   │   └── report_builder.py   # Stage 10 — Final Audit Report
 │   │   ├── preprocessing/
 │   │   │   ├── input_router.py     # text / url / file → SharedContext
-│   │   │   └── content_extractor.py
+│   │   │   └── content_extractor.py  # trafilatura · pypdf · BeautifulSoup
+│   │   ├── evaluation/             # validation corpus + calibration runner
 │   │   └── api/
 │   │       ├── main.py             # app factory, CORS, error contract
 │   │       ├── routes_audit.py     # POST /audit, /audit/{text,url,file}, status
@@ -323,8 +371,10 @@ auditor/
 │       ├── api/
 │       │   ├── client.ts           # the shared API client
 │       │   └── types.ts            # TypeScript mirror of the contracts
+│       ├── api/export.ts           # JSON + Markdown report export
 │       ├── pages/                  # Dashboard, AuditPage, ResultsPage
-│       └── components/             # Navbar, InputPanel, ReportPanel, LoadingState
+│       └── components/             # Navbar, InputPanel, ReportPanel,
+│                                   # LoadingState, EvidenceViewer
 ├── config/
 │   ├── settings.yaml               # thresholds, weights, models
 │   └── prompts/                    # one dir per engine; <stage>.<version>.md
@@ -332,9 +382,14 @@ auditor/
 │       ├── credibility/           # extraction · mapping · grounding · source class
 │       ├── relevance/             # extraction · classification · evaluation
 │       ├── coverage/              # extraction · salience · category/severity · verification
-│       └── {novelty,readability,engagement,diversity}/   # Milestone 4
-├── datasets/                       # validation fixtures (good/medium/poor)
-└── docs/                           # Documents 1–4
+│       ├── novelty/               # functional repetition review
+│       ├── readability/           # review · issue classification · severity
+│       ├── engagement/            # task id · task fitness · manipulation
+│       └── diversity/             # applicability · stance · viewpoints · balance · bias
+├── datasets/                       # validation corpus (good/medium/poor) + labels
+├── tests/                          # unit · engines · decision · api · e2e
+├── docker-compose.yml              # backend + frontend
+└── docs/                           # Documents 1–4 + HANDOFF.md
 ```
 
 **Note on layout.** Document 4 §3 specifies `backend/audit_engines/`, `backend/shared/`, and so on. Those modules live under `backend/app/` so that `uvicorn app.main:app` works from `backend/`. Every module name and responsibility is unchanged.
@@ -370,19 +425,22 @@ curl -X POST http://127.0.0.1:8000/audit \
 
 ---
 
-## Milestone status
+## Project status
 
-### Done — Milestone 1 (foundation)
+**Complete.** All six milestones are done and verified.
 
-Folder structure, configuration, logging, the frozen `AuditResult` / `AuditReport` contracts, the provider seam, the engine registry and base class, the API surface, and the React frontend.
+| Layer | State |
+|---|---|
+| Foundation — config, logging, frozen contracts, provider seam, API, frontend | ✅ |
+| Shared framework — SharedContext, prompts, evidence, embeddings, retrieval, validators | ✅ |
+| **8 audit engines** — Accuracy · Credibility · Relevance · Coverage · Novelty · Readability · Engagement · Diversity | ✅ |
+| **Decision Engine** — applicability · critical findings · trust · quality · confidence · recommendations · report | ✅ |
+| Input — text · URL · file (txt/md/pdf/html) | ✅ |
+| Frontend — async polling, Evidence Viewer, export, real progress | ✅ |
+| Packaging — Docker, Compose | ✅ |
+| Validation corpus + calibration runner | ✅ |
 
-### Done — Milestone 2 (shared framework)
-
-The infrastructure every engine reuses, so no engine reimplements it: preprocessing (segmentation with source offsets, statistics, metadata), `SharedContext` with two-tier lazy caching, LLM Extraction (§5.1), the Prompt Manager, the evidence pipeline, and the orchestrator's wave execution.
-
-### Done — Milestone 3 (Trust and Hybrid engines)
-
-All four **Critical-Finding-capable** engines, each following its frozen pipeline stage by stage:
+### What each engine detects
 
 | Engine | Type | Detects | Critical Finding |
 |---|---|---|---|
@@ -390,25 +448,26 @@ All four **Critical-Finding-capable** engines, each following its frozen pipelin
 | **Credibility** | Trust | Citations that don't resolve, or resolve to the wrong thing | Fabricated / Misattributed citation |
 | **Relevance** | Hybrid | Unmet instructions, scope drift, constraint violations | Violated hard requirement |
 | **Coverage** | Hybrid | Salient information dropped from the source | Critical omission |
+| **Novelty** | Quality | Redundancy that adds nothing (protecting functional repetition) | — never gates trust |
+| **Readability** | Quality | Clarity, coherence, and structure problems | — never gates trust |
+| **Engagement** | Quality | Manipulative phrasing; failure to serve the user's goal | — never gates trust |
+| **Diversity** | Quality | Unfair treatment of legitimate viewpoints — **or N/A** | — never gates trust |
 
-Plus the shared components they required: Classification & Weighting (§5.2), LLM Verification / Judge (§5.4), the Confidence Estimator (§5.10), Retrieval (chunking, embedding search, fetching), Deterministic Validators (constraints, URL/DOI), the local embedding backend, and 15 prompt templates.
+Only the four Trust/Hybrid engines can emit Critical Findings, which is exactly
+why only they can gate trust.
 
-### Why every audit still says *Unable to Verify*
+### Behaviors that look like bugs and are not
 
-`POST /audit` returns a placeholder report from `report_builder.build_placeholder_report`. **Its verdict is a safety property, not a filler value.** The engines now measure, but the **Decision Engine that turns eight `AuditResult`s into a verdict is Milestone 4** — so nothing yet interprets them, and trust remains genuinely undetermined.
+The auditor is deliberately careful about what it claims. These are all correct:
 
-The orchestrator is complete and verified, but is **not yet wired into the route**: without the Decision Engine it would run eight engines and discard the results. The seam is one call in `routes_audit._run_audit`.
+- **No API key ⇒ every audit is *Unable to Verify*.** Nothing was measured, so trust is undetermined — not failed.
+- **Accuracy with no reference ⇒ score 1.0, confidence 0.32.** The score says "of what was checked, all held up"; the confidence says "almost nothing was checked."
+- **Diversity returns `N/A` on technical content.** Demanding perspective balance from a settled question would reward inventing a controversy.
+- **Quality is still reported on content gated to *Untrusted*.** Polished *and* untrustworthy is a real state, and fusing the axes would hide it.
+- **A low trust score with high confidence is *Needs Revision*, not *Untrusted*.** *Untrusted* is reserved for a disqualifying finding. A weakness is not a disqualification.
+- **Unlinked citations ("Smith et al., 2023") raise no finding.** Academic prose is full of real unlinked references.
 
-### Milestone 4 — Quality engines, Decision Engine, validation
-
-1. **Novelty, Readability, Engagement, Diversity** (Document 2 §7.5–§7.8). The shared framework is in place: subclass `LLMJudge` / `LLMClassifier`, add a prompt. Two shared validators remain — `analyze_readability` and `detect_manipulation_patterns`.
-2. **Decision Engine workflow** (Document 3 §4) — the stage modules, then `DecisionEngine.decide` and `build_report`. `resolve_verdict` is already done and is the correctness core.
-3. **Swap the placeholder** — replace the `build_placeholder_report` call in `routes_audit._run_audit` with the orchestrator + Decision Engine. No route signatures change.
-4. **URL and file input** — `content_extractor.from_url` / `from_file`, and the matching `input_router` paths.
-5. **Finish the frontend** — Evidence Viewer drill-through, dimension cards, async polling, report export.
-6. **Tests** (Document 4 §10) — `tests/{unit,engines,decision,api,e2e}/`. The Decision Engine suite must be exhaustive on gate logic: it is deterministic given inputs, so it is both the correctness core and cheap to test.
-7. **Validation** (Document 4 §11) — the good/medium/poor corpus, proving the auditor separates good content from bad. **This is where the engine thresholds get tuned** — `config/settings.yaml` `engines.*` — against real samples rather than reasoning.
-8. **Packaging** — `Dockerfile` and `docker-compose.yml`.
+`docs/HANDOFF.md` §12 has the full list with the reasoning.
 
 ---
 

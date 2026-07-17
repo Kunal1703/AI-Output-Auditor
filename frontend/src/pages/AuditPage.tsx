@@ -3,77 +3,138 @@
  *
  * Document 4 §8 steps: Input Selection → Audit Progress → Results Dashboard.
  *
- * The page owns the submit-and-wait flow and hands the finished report to the
- * Results page. Today it uses the synchronous `POST /audit`; Milestone 2 swaps
- * in the async create-and-poll flow, at which point `LoadingState` receives
- * real `engines_completed` from `GET /audit/{id}/status`.
+ * Uses the **async create-and-poll** flow: `POST /audit/{text,url}` returns an
+ * `audit_id` immediately, and the page polls `GET /audit/{id}/status` until the
+ * report is ready. That is what lets `LoadingState` show real engine completion
+ * rather than a decorative spinner (Document 4, §8: "Progress is real").
+ *
+ * The synchronous `POST /audit` still exists and is the right call for a
+ * script. It is the wrong call for a browser: a full audit makes many LLM calls
+ * and would hold the connection open for minutes with nothing to show.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import InputPanel from '@/components/InputPanel';
 import LoadingState from '@/components/LoadingState';
-import { ApiError, audit } from '@/api/client';
-import type { AuditRequest } from '@/api/types';
+import {
+  ApiError,
+  auditFile,
+  auditText,
+  auditUrl,
+  pollUntilComplete,
+} from '@/api/client';
+import type {
+  AuditCreatedResponse,
+  AuditRequest,
+  AuditStatusResponse,
+} from '@/api/types';
 
 /** The audit submission page. */
 export default function AuditPage() {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; auditId?: string } | null>(
+    null,
+  );
+  const [status, setStatus] = useState<AuditStatusResponse | null>(null);
+  const abort = useRef<AbortController | null>(null);
 
-  async function handleSubmit(request: AuditRequest) {
+  // Stop polling if the user navigates away mid-audit. Without this the loop
+  // keeps running and calls setState on an unmounted component.
+  useEffect(() => () => abort.current?.abort(), []);
+
+  /** Create the job, poll it to completion, and hand the report on. */
+  async function run(create: () => Promise<AuditCreatedResponse>) {
     setBusy(true);
     setError(null);
+    setStatus(null);
+
+    const controller = new AbortController();
+    abort.current = controller;
+
     try {
-      const report = await audit(request);
-      // Hand the report to the Results page via router state rather than
-      // refetching it there — the report is large, and the backend already
-      // sent it once.
-      navigate('/results', { state: { report } });
-    } catch (cause) {
-      setError(
-        cause instanceof ApiError
-          ? cause.message
-          : 'The audit failed for an unknown reason.',
+      const created = await create();
+      const report = await pollUntilComplete(
+        created.audit_id,
+        setStatus,
+        controller.signal,
       );
+
+      // Hand the report to the Results page via router state rather than
+      // refetching it there — the backend already sent it once, and the id is
+      // in the URL for anyone who wants to reload.
+      navigate(`/results/${created.audit_id}`, { state: { report } });
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === 'aborted') {
+        return; // the user navigated away; nothing to report
+      }
+      setError({
+        message:
+          cause instanceof ApiError
+            ? cause.message
+            : 'The audit failed for an unknown reason.',
+        auditId:
+          cause instanceof ApiError && cause.code === 'poll_timeout'
+            ? status?.audit_id
+            : undefined,
+      });
     } finally {
+      abort.current = null;
       setBusy(false);
     }
   }
+
+  const handleSubmit = (request: AuditRequest) =>
+    run(() => (request.url ? auditUrl(request) : auditText(request)));
+
+  const handleSubmitFile = (file: File, prompt?: string, reference?: string) =>
+    run(() => auditFile(file, prompt, reference));
 
   return (
     <div className="space-y-6">
       <header className="pt-4">
         <h1 className="text-2xl font-bold text-slate-100">New audit</h1>
         <p className="mt-1.5 text-sm text-slate-400">
-          Submit AI-generated content as text or a URL. The optional prompt and
-          reference source unlock dimensions that need them.
+          Submit AI-generated content as text, a URL, or a file. The optional
+          prompt and reference source unlock dimensions that need them.
         </p>
       </header>
 
       {error && (
-        <div className="rounded-lg border border-verdict-untrusted/40 bg-verdict-untrusted/10 p-4">
+        <div
+          role="alert"
+          className="rounded-lg border border-verdict-untrusted/40 bg-verdict-untrusted/10 p-4"
+        >
           <p className="text-sm font-medium text-verdict-untrusted">
             Audit failed
           </p>
-          <p className="mt-1 text-sm text-slate-400">{error}</p>
+          <p className="mt-1 text-sm text-slate-400">{error.message}</p>
+          {error.auditId && (
+            <p className="mt-2 font-mono text-xs text-slate-500">
+              audit id: {error.auditId}
+            </p>
+          )}
         </div>
       )}
 
       {busy ? (
-        <LoadingState message="Running the audit engines…" />
+        <LoadingState
+          enginesCompleted={status?.engines_completed ?? 0}
+          enginesTotal={status?.engines_total ?? 8}
+          message={
+            status?.status === 'queued'
+              ? 'Queued — preparing the run…'
+              : 'Running the audit engines…'
+          }
+        />
       ) : (
-        <InputPanel onSubmit={handleSubmit} busy={busy} />
+        <InputPanel
+          onSubmit={handleSubmit}
+          onSubmitFile={handleSubmitFile}
+          busy={busy}
+        />
       )}
-
-      <p className="text-xs text-slate-600">
-        Milestone 1: the API contract and report shape are live, but the audit
-        engines are not yet implemented — every audit returns{' '}
-        <span className="text-slate-500">Unable to Verify</span> with nothing
-        measured. That is the honest verdict for a system that has checked
-        nothing, and it is what the engines will replace in Milestone 2.
-      </p>
     </div>
   );
 }

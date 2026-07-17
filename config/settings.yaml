@@ -91,6 +91,187 @@ decision:
     Engagement: 0.75
     Diversity: 0.5
 
+# Per-engine tunables. Document 2 §2 puts thresholds out of its own scope and
+# Document 1 §11 makes them configuration, not code. Retuning any of these moves
+# where a line sits; none can change a frozen pipeline, or the rule that a
+# qualifying Critical Finding gates trust non-compensatorily.
+#
+# These are reasoned defaults, not measured ones. Milestone 6 validation tunes
+# them against the good/medium/poor corpus (Document 4, §11).
+engines:
+  accuracy:
+    # Minimum relatedness for a retrieved passage to reach the verification
+    # judge. Below it the passage is noise, and a judge shown noise is likelier
+    # to hallucinate support than to answer "Unverifiable".
+    #
+    # Scale note: this is RAW cosine clamped at 0 (see embedding_service.
+    # relatedness), NOT cosine rescaled from [-1,1]. On this scale ~0.3 is
+    # loosely related and ~0.7 strongly related. Rescaling would compress every
+    # score into [0.5,0.9] and silently disable this threshold.
+    evidence_similarity_threshold: 0.45
+    evidence_top_k: 4
+
+    # Severity a contradicted claim's own stage-4 severity must reach before it
+    # becomes a Critical Finding.
+    contradiction_blocking_severity: "high"
+
+    # Centrality floor for raising a finding. 0 by default: a contradicted
+    # claim is a contradicted claim, and suppressing peripheral ones would hide
+    # real hallucinations.
+    min_centrality_for_finding: 0.0
+
+  credibility:
+    fabrication_severity: "high"
+    misattribution_severity: "high"
+    # Ceiling on source fetches per audit, so a document with 200 links cannot
+    # stall the run past its budget.
+    max_sources_fetched: 12
+    source_excerpt_chars: 4000
+
+  relevance:
+    # Relatedness to the prompt below which a sentence counts as scope drift.
+    # Same raw-cosine scale as accuracy.evidence_similarity_threshold.
+    scope_drift_threshold: 0.30
+
+    # Fraction of drifting sentences tolerated before drift affects the score.
+    # Some drift is normal prose — transitions, framing, caveats — and faulting
+    # the first off-topic sentence would penalise ordinary writing.
+    scope_drift_tolerance: 0.25
+    hard_requirement_blocking_severity: "high"
+
+  coverage:
+    # The threshold that keeps Coverage from over-penalizing summarization
+    # (Document 2, §7.3). An absent key point below this salience is a score
+    # effect, not a trust gate — a summary omits by design.
+    critical_omission_salience: 0.70
+    critical_omission_severity: "high"
+
+    # Credit a "Partial" key point earns. The middle value exists because a
+    # briefly-mentioned point is neither fully covered nor omitted.
+    partial_credit: 0.5
+
+  readability:
+    # Heuristic bounds for the Deterministic Analysis stage (Document 2, §7.6
+    # stage 2). Exceeding one is a MEASUREMENT, not a verdict: the stage 3 LLM
+    # review decides what it means with the sentence in front of it, and the
+    # score weights that review 3:1 over these. A long sentence a reader parses
+    # on the first pass is clear, and no bound here can say otherwise.
+    max_mean_sentence_words: 25.0
+    max_sentence_words: 45.0
+
+    # Flesch reading-ease floor. Set low on purpose: technical content is
+    # legitimately dense, and a stricter floor would flag every engineering
+    # document as unreadable for being about engineering.
+    min_reading_ease: 30.0
+    max_grade_level: 14.0
+    max_paragraph_words: 150.0
+
+    # Below this word count, the absence of headings or lists is not worth
+    # reporting — a short answer needs no navigation, and faulting it for
+    # having none would fault it for being short.
+    structure_required_above_words: 400.0
+
+    # Below this, the output is too short to assess for coherence or structure
+    # (they are properties of how parts relate, and there are no parts). The
+    # engine reports a neutral score with low confidence rather than a verdict
+    # it could not reach.
+    min_words_for_review: 25
+    words_for_full_confidence: 150
+    expected_check_count: 8
+
+  novelty:
+    # Relatedness above which two segments become a redundancy CANDIDATE — not
+    # a finding. Stage 6's review decides whether the repetition earns its
+    # place, because a summary and a padded restatement look identical here.
+    #
+    # Same raw-cosine scale as accuracy.evidence_similarity_threshold. Rescaling
+    # would compress every pair into [0.5,0.9] and make this fire on everything.
+    #
+    # MEASURED on all-MiniLM-L6-v2, not guessed: genuine padded restatement
+    # scores 0.66-0.94, a genuine summary recap 0.72, and sentences that merely
+    # share a topic 0.56 and below. The separation sits at ~0.60. An earlier
+    # 0.75 default missed both the 0.66 padding and the 0.72 recap — and
+    # missing the recap silently disabled the Coverage cross-check, since a
+    # passage that is never a candidate can never be rescued.
+    semantic_threshold: 0.60
+
+    # Token-overlap floor for a literal duplicate — catches a near-verbatim
+    # repeat differing by an article, which exact matching would miss.
+    literal_threshold: 0.85
+
+    min_segment_words: 5
+    max_candidates: 25
+
+    # The Coverage cross-check (stage 7). A confirmed-redundant segment that
+    # restates a salient key point Coverage found present is rescued as
+    # functional repetition — otherwise Novelty would tell the writer to delete
+    # the sentence Coverage rewards them for including, and the two engines
+    # would issue opposite instructions about the same text.
+    #
+    # The match threshold sits below semantic_threshold on purpose: a recap
+    # paraphrases a key point rather than echoing it, so demanding near-identity
+    # would defeat the rescue.
+    coverage_match_threshold: 0.55
+    coverage_salience_floor: 0.60
+
+    words_for_full_confidence: 120
+
+  engagement:
+    # Score penalty per CONFIRMED manipulation item, by the matched pattern's
+    # severity. A pattern match alone costs nothing — stage 6's LLM verification
+    # must confirm it first, because the regex flags an article that quotes a
+    # scam exactly as readily as the scam itself.
+    #
+    # Subtracted rather than averaged: content that manipulates its reader has
+    # done something wrong that being useful does not excuse, and averaging
+    # would let a high task-fitness score dilute it away.
+    manipulation_penalty:
+      critical: 0.35
+      high: 0.25
+      medium: 0.12
+      low: 0.05
+      info: 0.0
+
+    # Fraction of the penalty a "Borderline" item carries. Pushy phrasing is a
+    # real cost and a smaller one than deception. At 0 the middle verdict would
+    # be meaningless; at 1 it would be a synonym for Manipulative.
+    borderline_penalty_factor: 0.4
+
+  diversity:
+    # NOTE: there is no applicability threshold here, deliberately. Whether the
+    # dimension applies is a judgment stage 2 makes against the criteria in its
+    # prompt, not a number. A configurable gate would let a deployment quietly
+    # switch the only N/A in the system on or off.
+
+    # Relatedness floor for a reference passage to count as a retrieved
+    # perspective. Raw cosine, same scale as accuracy's evidence threshold, but
+    # set LOWER on purpose: a passage arguing a position the output never took
+    # is topically distant from the topic by construction, so a strict floor
+    # would retrieve only the perspectives the output already holds — which is
+    # the opposite of what this stage is for.
+    perspective_similarity_threshold: 0.35
+    perspective_top_k: 6
+
+    # External fetches, and only when the request opted into external retrieval.
+    max_sources_fetched: 6
+    source_excerpt_chars: 3000
+
+    # Score penalty per detected bias item, by severity. Subtracted rather than
+    # averaged: loaded framing is a fault that naming every viewpoint does not
+    # offset.
+    bias_penalty:
+      critical: 0.30
+      high: 0.20
+      medium: 0.10
+      low: 0.04
+      info: 0.0
+
+    # NOTE: there is deliberately no "undisclosed stance" penalty. Content that
+    # argues a position while posing as a neutral survey is classified Neutral
+    # by stage 4 ("Declared" advocacy means declared), so the strict balance
+    # standard already applies to it and the imbalance it was hiding is exactly
+    # what the score reports. A separate penalty would double-count it.
+
 jobs:
   retention_seconds: 3600
   max_concurrent_audits: 4

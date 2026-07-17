@@ -20,11 +20,13 @@
  * Engine.
  *
  * @remarks
- * Milestone 1 placeholder: the verdict banners, dimension table, and structure
- * are real and driven by the report. The Evidence Viewer drill-through and
- * export land in Milestone 2 with the engines that produce evidence.
+ * The verdict banners, the dimension table, and the per-dimension rationale are
+ * driven entirely by the report the Decision Engine produced. The Evidence
+ * Viewer drill-through and report export land in Milestone 6.
  */
 
+import { useState } from 'react';
+import EvidenceViewer from '@/components/EvidenceViewer';
 import { formatConfidence, formatScore } from '@/api/client';
 import type {
   AuditReport,
@@ -32,6 +34,12 @@ import type {
   OverallVerdict,
   Severity,
 } from '@/api/types';
+
+/** What the Evidence Viewer is currently showing. */
+interface EvidenceTarget {
+  title: string;
+  refs: string[];
+}
 
 interface ReportPanelProps {
   report: AuditReport;
@@ -60,6 +68,14 @@ const SEVERITY_STYLES: Record<Severity, string> = {
   info: 'bg-severity-info/15 text-severity-info border-severity-info/30',
 };
 
+/** Priority → colour. Critical must not look like polish (Document 3, §10). */
+const PRIORITY_STYLES: Record<string, string> = {
+  Critical: 'border-severity-critical/40 bg-severity-critical/15 text-severity-critical',
+  High: 'border-severity-high/40 bg-severity-high/15 text-severity-high',
+  Medium: 'border-severity-medium/40 bg-severity-medium/15 text-severity-medium',
+  Low: 'border-slate-700 bg-slate-800/50 text-slate-400',
+};
+
 const TYPE_STYLES: Record<DimensionType, string> = {
   Trust: 'bg-trust-900/40 text-trust-100 border-trust-700/50',
   Quality: 'bg-quality-700/20 text-quality-100 border-quality-700/50',
@@ -85,6 +101,8 @@ function Section({
 
 /** Renders a complete Final Audit Report. */
 export default function ReportPanel({ report }: ReportPanelProps) {
+  const [evidence, setEvidence] = useState<EvidenceTarget | null>(null);
+
   return (
     <div className="space-y-5">
       {/* Verdict first (Document 4, §8). */}
@@ -164,6 +182,18 @@ export default function ReportPanel({ report }: ReportPanelProps) {
                 <p className="mt-1.5 text-sm text-slate-300">
                   {finding.description}
                 </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEvidence({
+                      title: `${finding.dimension} — ${finding.type}`,
+                      refs: finding.evidence_refs,
+                    })
+                  }
+                  className="mt-2 text-xs underline decoration-dotted opacity-80 transition hover:opacity-100"
+                >
+                  Show the evidence ({finding.evidence_refs.length})
+                </button>
               </li>
             ))}
           </ul>
@@ -179,12 +209,19 @@ export default function ReportPanel({ report }: ReportPanelProps) {
                 <th className="pb-2 pr-4 font-medium">Dimension</th>
                 <th className="pb-2 pr-4 font-medium">Type</th>
                 <th className="pb-2 pr-4 font-medium">Score</th>
-                <th className="pb-2 font-medium">Confidence</th>
+                <th className="pb-2 pr-4 font-medium">Confidence</th>
+                <th className="pb-2 font-medium">Why</th>
               </tr>
             </thead>
             <tbody>
               {report.dimension_results.map((result) => {
                 const meta = result.metadata;
+                // Document 3 §12 requires a one-line rationale per row. It is
+                // decided by the Decision Engine, never derived here — the
+                // frontend renders what the backend concluded (Document 4 §5).
+                const summary = report.dimension_summaries.find(
+                  (s) => s.dimension === meta.dimension,
+                );
                 return (
                   <tr
                     key={meta.engine_id}
@@ -211,8 +248,11 @@ export default function ReportPanel({ report }: ReportPanelProps) {
                     <td className="py-2.5 pr-4 font-mono text-slate-300">
                       {formatScore(result.score)}
                     </td>
-                    <td className="py-2.5 font-mono text-slate-400">
+                    <td className="py-2.5 pr-4 font-mono text-slate-400">
                       {formatConfidence(result.confidence)}
+                    </td>
+                    <td className="py-2.5 text-xs text-slate-500">
+                      {summary?.rationale ?? ''}
                     </td>
                   </tr>
                 );
@@ -249,13 +289,29 @@ export default function ReportPanel({ report }: ReportPanelProps) {
             {report.recommendations.map((rec, index) => (
               <li
                 key={`${rec.dimension}-${index}`}
-                className="flex gap-3 rounded border border-slate-800 p-3"
+                className="flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded border border-slate-800 p-3"
               >
-                <span className="text-xs font-semibold text-slate-400">
+                <span
+                  className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${PRIORITY_STYLES[rec.priority]}`}
+                >
                   {rec.priority}
                 </span>
-                <span className="flex-1 text-sm text-slate-300">{rec.text}</span>
+                <span className="min-w-0 flex-1 text-sm text-slate-300">
+                  {rec.text}
+                </span>
                 <span className="text-xs text-slate-600">{rec.dimension}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEvidence({
+                      title: `${rec.dimension} — ${rec.priority} recommendation`,
+                      refs: rec.evidence_refs,
+                    })
+                  }
+                  className="basis-full text-left text-xs text-slate-500 underline decoration-dotted transition hover:text-slate-300"
+                >
+                  Show the evidence ({rec.evidence_refs.length})
+                </button>
               </li>
             ))}
           </ol>
@@ -263,6 +319,15 @@ export default function ReportPanel({ report }: ReportPanelProps) {
           <p className="text-sm text-slate-500">No recommendations.</p>
         )}
       </Section>
+
+      {evidence && (
+        <EvidenceViewer
+          report={report}
+          evidenceRefs={evidence.refs}
+          title={evidence.title}
+          onClose={() => setEvidence(null)}
+        />
+      )}
     </div>
   );
 }

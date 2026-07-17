@@ -99,14 +99,61 @@ class ProviderError(AuditorError):
     Shared Services raise this after their bounded retries are exhausted
     (Document 4, §12). Callers inside an engine are expected to catch it and
     degrade, not to propagate it to the API.
+
+    **Not every provider failure is worth retrying, and retrying the ones that
+    are not is how a misconfiguration becomes a timeout.** A missing key, a
+    rejected key, and a malformed request will fail identically on the fourth
+    attempt as on the first; the only thing the retries buy is backoff. With
+    eight engines each making several calls, that turns a clear configuration
+    error into minutes of silence — the failure mode most likely to greet a
+    first-time user, who has by definition not set up their key yet.
+
+    So the classification travels with the error. The provider knows why it
+    failed; the LLM Service knows what to do about it. Neither has to guess.
+
+    Args:
+        message: Human-readable explanation.
+        retryable: Whether another identical attempt could plausibly succeed.
+            Defaults to ``True``, which preserves the behavior of every raise
+            site that does not care — transient failure is the common case, and
+            a provider that has not been taught the distinction should keep
+            retrying rather than silently stop.
+        retry_after: Seconds the provider asked the caller to wait, from a
+            ``Retry-After`` header. Honored as a floor on the backoff — a
+            rate limiter that names its own interval knows better than our
+            exponential curve does.
+        status_code: The upstream HTTP status, when there was one. Recorded for
+            logs and for the classification itself.
+
+    Attributes:
+        retryable: See above.
+        retry_after: See above.
+        status_code: See above.
     """
 
     code = "provider_error"
     http_status = 502
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        retry_after: float | None = None,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.retry_after = retry_after
+        self.status_code = status_code
+
 
 class ProviderTimeoutError(ProviderError):
-    """An upstream provider exceeded its configured timeout."""
+    """An upstream provider exceeded its configured timeout.
+
+    Retryable by default: a timeout is the canonical transient failure, and the
+    next attempt may well land.
+    """
 
     code = "provider_timeout"
     http_status = 504

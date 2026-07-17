@@ -1,0 +1,74 @@
+# AI Trust & Quality Auditor — reproducible backend + frontend (Document 4, §2).
+#
+#   cp backend/.env.example backend/.env     # add your GROQ_API_KEY
+#   docker compose up --build
+#
+#   frontend  → http://localhost:5173
+#   backend   → http://localhost:8000/docs
+#
+# The first build installs torch and bakes in the embedding model; expect it to
+# take several minutes and produce a large backend image. Every build after is
+# cached.
+
+services:
+  backend:
+    build:
+      # The repo root, not backend/ — the image needs config/ and datasets/,
+      # which live above backend/. core.config resolves config/ as the parent of
+      # the app directory, so the image mirrors the repo layout rather than
+      # flattening it.
+      context: .
+      dockerfile: backend/Dockerfile
+    image: ai-trust-auditor-backend:latest
+    container_name: auditor-backend
+    env_file:
+      # The one place secrets come from. Nothing is baked into the image, and
+      # nothing is hardcoded in compose — the config layer reads the
+      # environment exactly as it does outside Docker.
+      #
+      # required: false so `docker compose up` works on a fresh clone. Without a
+      # key the stack still starts, /health reports llm_configured: false, and
+      # every audit returns Unable to Verify — which is the honest verdict for a
+      # system that cannot check anything, and a far better first experience
+      # than compose refusing to start with a file-not-found.
+      - path: backend/.env
+        required: false
+    environment:
+      # Containers are not the Vite dev server. The browser talks to nginx on
+      # 5173, which proxies to this service, so the allow-list must name that
+      # origin rather than the backend's own.
+      AUDITOR_CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
+      AUDITOR_LOG_FORMAT: json
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import httpx, sys
+          sys.exit(0 if httpx.get("http://127.0.0.1:8000/health", timeout=5).status_code == 200 else 1)
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ai-trust-auditor-frontend:latest
+    container_name: auditor-frontend
+    ports:
+      # 5173 outside so the URL matches the dev server and the backend's CORS
+      # allow-list needs no second entry.
+      - "5173:80"
+    depends_on:
+      backend:
+        # Wait for /health, not just for the process. The frontend proxies to
+        # the backend on first paint, and "started" is not "ready" when startup
+        # loads a model.
+        condition: service_healthy
+    restart: unless-stopped

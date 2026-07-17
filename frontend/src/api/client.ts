@@ -126,6 +126,58 @@ export function auditUrl(body: AuditRequest): Promise<AuditCreatedResponse> {
   });
 }
 
+/**
+ * Create an async audit job for an uploaded file (txt / md / pdf / html).
+ *
+ * Multipart rather than JSON, so it bypasses {@link request}'s JSON header and
+ * body handling. The browser must set the `Content-Type` itself — it has to
+ * append the multipart boundary, and setting the header by hand produces a
+ * request the backend cannot parse.
+ *
+ * @returns The `audit_id` to poll and retrieve by.
+ * @throws {ApiError} On rejection (unsupported format, too large, no text).
+ */
+export async function auditFile(
+  file: File,
+  prompt?: string,
+  referenceSource?: string,
+): Promise<AuditCreatedResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  if (prompt) form.append('prompt', prompt);
+  if (referenceSource) form.append('reference_source', referenceSource);
+
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_URL}/audit/file`, {
+      method: 'POST',
+      body: form,
+    });
+  } catch {
+    throw new ApiError(
+      'network_error',
+      'Could not reach the auditor backend. Is it running on port 8000?',
+      0,
+    );
+  }
+
+  if (!response.ok) {
+    let code = `http_${response.status}`;
+    let message = response.statusText;
+    try {
+      const body = await response.json();
+      if (body?.error?.code) {
+        code = body.error.code;
+        message = body.error.message;
+      }
+    } catch {
+      // Non-JSON error body; keep the status-derived defaults.
+    }
+    throw new ApiError(code, message, response.status);
+  }
+  return (await response.json()) as AuditCreatedResponse;
+}
+
 /** Poll a job's status and real engine progress. */
 export function getStatus(auditId: string): Promise<AuditStatusResponse> {
   return request<AuditStatusResponse>(`/audit/${auditId}/status`);
@@ -134,6 +186,73 @@ export function getStatus(auditId: string): Promise<AuditStatusResponse> {
 /** Retrieve the Final Audit Report for a completed audit. */
 export function getReport(auditId: string): Promise<AuditReport> {
   return request<AuditReport>(`/report/${auditId}`);
+}
+
+/** How often to ask the backend for progress, in milliseconds. */
+const POLL_INTERVAL_MS = 700;
+
+/**
+ * How long to keep polling before giving up.
+ *
+ * Generous on purpose. A real audit makes many LLM calls across eight engines,
+ * and each engine has its own 120s budget before the orchestrator degrades it.
+ * A client that gave up sooner would report a failure for a run the backend is
+ * about to finish — and the report would still be retrievable by id, which
+ * makes the timeout a lie about the system rather than a fact about it.
+ */
+const POLL_TIMEOUT_MS = 8 * 60 * 1000;
+
+/**
+ * Poll a job to completion, reporting real engine progress as it goes.
+ *
+ * This is the create-and-poll flow Document 4 §7 designed the async endpoints
+ * for, and the reason `LoadingState` can honour §8's "progress is real":
+ * `engines_completed` comes from the orchestrator's own callback, so when the
+ * number sits still it is telling the truth about a slow engine rather than
+ * animating reassurance.
+ *
+ * @param auditId - The id returned by `auditText` / `auditUrl`.
+ * @param onProgress - Called on every poll with the current status.
+ * @param signal - Abort to stop polling, e.g. when the user navigates away.
+ * @returns The Final Audit Report.
+ * @throws {ApiError} If the job fails, the poll times out, or it is aborted.
+ */
+export async function pollUntilComplete(
+  auditId: string,
+  onProgress?: (status: AuditStatusResponse) => void,
+  signal?: AbortSignal,
+): Promise<AuditReport> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+
+  for (;;) {
+    if (signal?.aborted) {
+      throw new ApiError('aborted', 'The audit was cancelled.', 0);
+    }
+
+    const status = await getStatus(auditId);
+    onProgress?.(status);
+
+    if (status.status === 'completed') {
+      return getReport(auditId);
+    }
+    if (status.status === 'failed') {
+      throw new ApiError(
+        'audit_failed',
+        status.error ?? 'The audit failed for an unknown reason.',
+        500,
+      );
+    }
+    if (Date.now() > deadline) {
+      throw new ApiError(
+        'poll_timeout',
+        `The audit is still running after ${POLL_TIMEOUT_MS / 60000} minutes. ` +
+          `It may still finish — retrieve it later with audit id ${auditId}.`,
+        504,
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
 }
 
 /**

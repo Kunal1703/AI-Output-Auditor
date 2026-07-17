@@ -1,0 +1,35 @@
+# Build context for the backend image (context is the repo root).
+#
+# The first entry is the important one: .env must never enter an image layer.
+# Secrets are injected at runtime via env_file, so a key baked into a layer is
+# a key that leaks with the image and survives every later "removal".
+
+**/.env
+**/.env.*
+!**/.env.example
+
+# Virtualenvs and caches — large, host-specific, and rebuilt in the image.
+**/.venv
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+
+# The frontend has its own image and its own context.
+frontend/node_modules
+frontend/dist
+
+# Repo metadata the runtime has no use for.
+.git
+.github
+.gitignore
+**/.DS_Store
+docs
+*.md
+!README.md
+
+# Local model caches; the image bakes its own.
+**/.cache
+**/models--*

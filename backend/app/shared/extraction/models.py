@@ -37,6 +37,7 @@ __all__ = [
     "Claim",
     "KeyPoint",
     "Citation",
+    "Viewpoint",
     "ExtractionResult",
 ]
 
@@ -192,6 +193,46 @@ class Citation:
         judges (Document 2, §7.4).
         """
         return bool(self.url or self.doi)
+
+
+@dataclass(frozen=True)
+class Viewpoint:
+    """One legitimate perspective on the question the content addresses.
+
+    Half of Diversity's Diversity Ledger unit (Document 2, §6.3: "Viewpoint /
+    bias item"), produced by §7.8 stage 6, "Viewpoint Extraction".
+
+    **A viewpoint is not a side.** It is a position a reasonable, informed person
+    holds on the question, together with the reasoning behind it. That framing is
+    what keeps Diversity from manufacturing false balance: on a settled factual
+    question there is one legitimate viewpoint, and an engine that assumed there
+    were two would reward inventing a controversy — the exact failure §7.8 names.
+
+    Attributes:
+        viewpoint_id: Run-unique id, e.g. ``"vwp_1"``.
+        text: The position, stated as someone holding it would state it. Not as
+            an opponent would characterize it — a viewpoint written by its
+            critics is a strawman, and the engine would then measure the output
+            against one.
+        source_span: Where the output states this viewpoint, when it does and
+            when it can be located. ``None`` when the output omits it entirely,
+            which is itself the answer to stage 7's question.
+        legitimacy: How well-founded the viewpoint is, in [0, 1]. **Always
+            ``None`` from extraction** — the balance evaluation weighs it.
+            Load-bearing: it is what separates "the output ignored a serious
+            objection" from "the output declined to platform a fringe claim",
+            and only the first is a failure.
+        in_output: Whether extraction saw this viewpoint in the AI Output at all,
+            as opposed to finding it in the retrieved perspectives.
+        attributes: Extra labels a later stage attaches.
+    """
+
+    viewpoint_id: str
+    text: str
+    source_span: TextSpan | None = None
+    legitimacy: float | None = None
+    in_output: bool = False
+    attributes: dict[str, Any] = field(default_factory=dict)
 
 
 UnitT = TypeVar("UnitT")

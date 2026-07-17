@@ -168,6 +168,22 @@ export interface PrioritizedRecommendation {
  * can be high-quality yet Untrusted, and blending them into one number would
  * destroy the distinction the whole system exists to draw.
  */
+/**
+ * One row of Document 3 §12's Dimension Results section: the flat projection of
+ * an AuditResult, plus the Decision Engine's one-line reading of it.
+ *
+ * N/A dimensions appear here explicitly as excluded, never omitted.
+ */
+export interface DimensionSummary {
+  dimension: string;
+  dimension_type: DimensionType;
+  score: Score;
+  confidence: number;
+  rationale: string;
+  applicable: boolean;
+  applicability_reason: string;
+}
+
 export interface AuditReport {
   audit_id: string;
   generated_at: string;
@@ -178,6 +194,7 @@ export interface AuditReport {
   confidence: ConfidenceReport;
   critical_findings: CriticalFinding[];
   dimension_results: AuditResult[];
+  dimension_summaries: DimensionSummary[];
   recommendations: PrioritizedRecommendation[];
   input_type: InputType;
   source_uri: string | null;

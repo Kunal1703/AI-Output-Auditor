@@ -127,9 +127,11 @@ class GroqProvider(LLMProvider):
             ProviderTimeoutError: The call exceeded ``request.timeout_seconds``.
         """
         if not self._api_key:
+            # Permanent by construction: no number of retries conjures a key.
             raise ProviderError(
                 "Groq API key is not configured. Set GROQ_API_KEY in "
-                "backend/.env (see .env.example)."
+                "backend/.env (see .env.example).",
+                retryable=False,
             )
         try:
             response = await self._client.post(
@@ -143,11 +145,15 @@ class GroqProvider(LLMProvider):
                 f"Groq did not respond within {request.timeout_seconds}s."
             ) from exc
         except httpx.HTTPError as exc:
+            # Transport-level: DNS, connection reset, TLS. Genuinely transient.
             raise ProviderError(f"Groq transport error: {exc}") from exc
 
         if response.status_code >= 400:
             raise ProviderError(
-                f"Groq returned {response.status_code}: {_safe_error_text(response)}"
+                f"Groq returned {response.status_code}: {_safe_error_text(response)}",
+                retryable=_is_retryable(response.status_code),
+                retry_after=_retry_after(response),
+                status_code=response.status_code,
             )
 
         try:
@@ -215,6 +221,48 @@ class GroqProvider(LLMProvider):
         """Close the HTTP client, if this provider created it."""
         if self._owns_client:
             await self._client.aclose()
+
+
+def _is_retryable(status_code: int) -> bool:
+    """Whether another identical request could plausibly succeed.
+
+    **429 is retryable and that is the important one.** Groq's free tier rate
+    limits, and this auditor fans out to six concurrent engines in wave 1 — so a
+    429 is not an exceptional case here, it is Tuesday. Treating it as permanent
+    would degrade half the dimensions of a perfectly good audit.
+
+    **4xx auth and request errors are not.** A rejected key, a forbidden model,
+    or a malformed payload fails identically on every attempt; retrying only
+    converts a clear error into a slow one. The default model rejecting
+    ``reasoning_format`` would land here as a 400 — exactly the misconfiguration
+    a first-time user hits, and exactly the one that must fail fast and say why.
+
+    **5xx is retryable.** An upstream fault is the transient case retries exist
+    for.
+    """
+    if status_code == 429:
+        return True
+    if 500 <= status_code < 600:
+        return True
+    return False
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Read the ``Retry-After`` header, when the provider set one.
+
+    A rate limiter that names its own interval knows better than our exponential
+    curve does. Only the delta-seconds form is parsed; the HTTP-date form is
+    rare in practice and guessing at a clock skew would be worse than falling
+    back to the configured backoff.
+    """
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        seconds = float(raw.strip())
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
 
 
 def _safe_error_text(response: httpx.Response) -> str:

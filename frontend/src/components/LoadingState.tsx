@@ -36,8 +36,8 @@ const DIMENSIONS = [
  * Audit progress indicator.
  *
  * @remarks
- * Milestone 1 placeholder. It renders real progress when given real numbers;
- * Milestone 2 wires it to the polling loop in `AuditPage`.
+ * It renders real progress when given real numbers. Milestone 6 wires it to a
+ * polling loop in `AuditPage`; today the synchronous endpoint gives it none.
  */
 export default function LoadingState({
   enginesCompleted = 0,

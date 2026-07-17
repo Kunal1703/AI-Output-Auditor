@@ -53,6 +53,20 @@ def build_report(
 ) -> AuditReport:
     """Assemble the Final Audit Report from a decision outcome.
 
+    A projection, not a decision. Every value here was decided in the workflow;
+    this function chooses nothing, computes nothing, and re-derives nothing —
+    which is why the report can be trusted to say exactly what the Decision
+    Engine concluded.
+
+    **The eight results are carried verbatim.** Flattening them to scores would
+    save bytes and cost the report its traceability: the ledger and evidence
+    behind every verdict live in those objects, and Document 3 §12 guarantees a
+    reader can drill from any conclusion to the span that supports it.
+
+    **Ordering is by the frozen dimension matrix**, not by score or by whatever
+    order the orchestrator happened to finish in. A report whose rows move
+    between runs is a report nobody can diff.
+
     Args:
         audit_id: The id the report is retrieved by.
         decision: The Decision Engine's cross-dimensional outcome.
@@ -64,14 +78,30 @@ def build_report(
 
     Returns:
         The Final Audit Report.
-
-    Raises:
-        NotImplementedError: Until Milestone 2, with the decision workflow that
-            produces the ``DecisionResult`` it consumes.
     """
-    raise NotImplementedError(
-        "build_report is implemented in Milestone 2, alongside the Decision "
-        "Engine workflow (Document 3, §4 and §12)."
+    order = {dimension: index for index, dimension in enumerate(DIMENSION_SPECS)}
+    ordered_results = sorted(
+        dimension_results,
+        key=lambda r: order.get(r.metadata.dimension, len(order)),
+    )
+    ordered_summaries = sorted(
+        decision.dimension_summaries,
+        key=lambda s: order.get(s.dimension, len(order)),
+    )
+
+    return AuditReport(
+        audit_id=audit_id,
+        overall_verdict=decision.overall_verdict,
+        trust_verdict=decision.trust_verdict,
+        quality_verdict=decision.quality_verdict,
+        summary=decision.summary,
+        confidence=decision.confidence,
+        critical_findings=list(decision.critical_findings),
+        dimension_results=ordered_results,
+        dimension_summaries=ordered_summaries,
+        recommendations=list(decision.recommendations),
+        input_type=input_type,
+        source_uri=source_uri,
     )
 
 

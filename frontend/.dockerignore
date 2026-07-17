@@ -1,0 +1,14 @@
+# Build context for the frontend image.
+#
+# node_modules is reinstalled with `npm ci` inside the image: the host's copy
+# may carry platform-specific binaries that do not run on alpine, and copying it
+# in is both slower and less reproducible than installing from the lockfile.
+
+node_modules
+dist
+.env
+.env.*
+!.env.example
+.git
+**/.DS_Store
+*.log

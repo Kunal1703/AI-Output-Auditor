@@ -15,8 +15,8 @@
  *   meaningless without something to be complete with respect to.
  *
  * @remarks
- * Milestone 1 placeholder — the layout and submit contract are real; the file
- * tab and submission wiring land in Milestone 2.
+ * The layout and submit contract are real; the file tab and its submission
+ * wiring land in Milestone 6 with the content extractor.
  */
 
 import { useState } from 'react';
@@ -25,11 +25,20 @@ import type { AuditRequest } from '@/api/types';
 type Tab = 'text' | 'url' | 'file';
 
 interface InputPanelProps {
-  /** Invoked with the assembled request when the user submits. */
+  /** Invoked with the assembled request when the user submits text or a URL. */
   onSubmit?: (request: AuditRequest) => void;
+  /**
+   * Invoked when the user submits a file. Separate from {@link onSubmit}
+   * because the file endpoint is multipart, not JSON — a `File` cannot travel
+   * inside an `AuditRequest`.
+   */
+  onSubmitFile?: (file: File, prompt?: string, referenceSource?: string) => void;
   /** Disables the form while an audit is running. */
   busy?: boolean;
 }
+
+/** What the backend's content extractor can actually read. */
+const ACCEPTED_FILES = '.txt,.md,.markdown,.rst,.text,.pdf,.html,.htm';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'text', label: 'Text' },
@@ -38,19 +47,35 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 /** Input collection panel with Text / URL / File tabs. */
-export default function InputPanel({ onSubmit, busy = false }: InputPanelProps) {
+export default function InputPanel({
+  onSubmit,
+  onSubmitFile,
+  busy = false,
+}: InputPanelProps) {
   const [tab, setTab] = useState<Tab>('text');
   const [text, setText] = useState('');
   const [url, setUrl] = useState('');
+  const [file, setFile] = useState<File | null>(null);
   const [prompt, setPrompt] = useState('');
   const [referenceSource, setReferenceSource] = useState('');
 
   const canSubmit =
-    !busy && (tab === 'text' ? text.trim().length > 0 : url.trim().length > 0);
+    !busy &&
+    (tab === 'text'
+      ? text.trim().length > 0
+      : tab === 'url'
+        ? url.trim().length > 0
+        : file !== null);
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!canSubmit) return;
+
+    if (tab === 'file' && file) {
+      onSubmitFile?.(file, prompt.trim() || undefined, referenceSource.trim() || undefined);
+      return;
+    }
+
     onSubmit?.({
       ...(tab === 'text' ? { text: text.trim() } : { url: url.trim() }),
       prompt: prompt.trim() || null,
@@ -115,12 +140,40 @@ export default function InputPanel({ onSubmit, busy = false }: InputPanelProps) 
       )}
 
       {tab === 'file' && (
-        <div className="grid place-items-center rounded border border-dashed border-slate-700 py-12 text-center">
-          <p className="text-sm text-slate-400">File upload (txt, md, pdf)</p>
-          <p className="mt-1 text-xs text-slate-600">
-            Available in Milestone 2, with the content extractor.
-          </p>
-        </div>
+        <label className="block cursor-pointer">
+          <span className="mb-1.5 block text-sm font-medium text-slate-300">
+            Document
+          </span>
+          <div className="grid place-items-center rounded border border-dashed border-slate-700 py-10 text-center transition hover:border-slate-600">
+            <input
+              type="file"
+              accept={ACCEPTED_FILES}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="sr-only"
+            />
+            {file ? (
+              <>
+                <p className="text-sm font-medium text-slate-200">{file.name}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {(file.size / 1024).toFixed(0)} KB · click to choose another
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-slate-400">
+                  Choose a document to audit
+                </p>
+                <p className="mt-1 text-xs text-slate-600">
+                  txt, md, pdf, or html · up to 10MB
+                </p>
+              </>
+            )}
+          </div>
+          <span className="mt-1.5 block text-xs text-slate-500">
+            A scanned PDF with no text layer cannot be audited — it needs OCR
+            first.
+          </span>
+        </label>
       )}
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2">

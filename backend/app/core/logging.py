@@ -118,6 +118,25 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+#: Attribute names ``logging.LogRecord`` owns. Passing any of them through
+#: ``extra=`` raises ``KeyError: Attempt to overwrite ... in LogRecord``.
+#:
+#: This list is a trap, not a curiosity. Several entries — ``filename``,
+#: ``module``, ``name``, ``process``, ``args``, ``msg`` — are exactly the words
+#: a caller reaches for when describing what they are logging, and the failure
+#: is a hard exception at the call site rather than a dropped field. Uploading a
+#: file crashed an entire audit on ``bind(filename=…)`` before this guard
+#: existed.
+_RESERVED_LOG_FIELDS: frozenset[str] = frozenset(
+    {
+        "args", "asctime", "created", "exc_info", "exc_text", "filename",
+        "funcName", "levelname", "levelno", "lineno", "message", "module",
+        "msecs", "msg", "name", "pathname", "process", "processName",
+        "relativeCreated", "stack_info", "taskName", "thread", "threadName",
+    }
+)
+
+
 def bind(**context: Any) -> dict[str, Any]:
     """Build an ``extra=`` mapping of structured fields.
 
@@ -132,13 +151,22 @@ def bind(**context: Any) -> dict[str, Any]:
     Do not pass the claim text, the output under audit, or a retrieved passage.
     Document 4 §12 restricts logs to ids for exactly this reason.
 
+    **Reserved names are renamed rather than rejected.** A field colliding with a
+    ``LogRecord`` attribute (``filename``, ``module``, ``name``, …) is suffixed
+    with an underscore instead of raising. A logging call must never be able to
+    fail the operation it is describing — an audit that crashes because of the
+    word chosen for a log field is an audit lost to its own telemetry.
+
     Args:
         **context: Structured fields to attach to the record.
 
     Returns:
-        A mapping suitable for the ``extra`` argument of a logging call.
+        A mapping safe to pass as the ``extra`` argument of a logging call.
     """
-    return context
+    return {
+        (f"{key}_" if key in _RESERVED_LOG_FIELDS else key): value
+        for key, value in context.items()
+    }
 
 
 @contextmanager

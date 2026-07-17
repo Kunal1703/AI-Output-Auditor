@@ -49,16 +49,36 @@ from app.shared.classification.key_points import (
     CategorySeverityAssigner,
     SalienceAssigner,
 )
+from app.shared.classification.diversity import (
+    ApplicabilityClassifier,
+    StanceContractDetector,
+)
+from app.shared.classification.readability import (
+    IssueClassifier,
+    IssueSeverityAssigner,
+)
 from app.shared.classification.requirements import RequirementClassifier
 from app.shared.classification.sources import SourceClassifier
 from app.shared.extraction.citations import CitationExtractionService
 from app.shared.extraction.claims import ClaimExtractionService
 from app.shared.extraction.key_points import KeyPointExtractionService
 from app.shared.extraction.requirements import RequirementExtractionService
+from app.shared.extraction.viewpoints import ViewpointExtractionService
 from app.shared.mapping import ClaimCitationMapper
 from app.shared.verification.claims import ClaimVerificationJudge
 from app.shared.verification.coverage import CoverageVerificationJudge
+from app.shared.task_identification import TaskIdentificationStage
+from app.shared.verification.diversity import (
+    BalanceEvaluationJudge,
+    BiasDetectionStage,
+)
+from app.shared.verification.engagement import (
+    ManipulationVerificationJudge,
+    TaskFitnessJudge,
+)
 from app.shared.verification.grounding import GroundingVerificationJudge
+from app.shared.verification.novelty import FunctionalRepetitionJudge
+from app.shared.verification.readability import ReadabilityReviewJudge
 from app.shared.verification.requirements import RequirementEvaluationJudge
 from app.shared.llm_providers.registry import build_provider
 from app.shared.llm_service import DefaultLLMService, LLMService
@@ -124,6 +144,7 @@ class ServiceContainer:
         self.claim_extraction = ClaimExtractionService(self.llm, self.prompts)
         self.key_point_extraction = KeyPointExtractionService(self.llm, self.prompts)
         self.citation_extraction = CitationExtractionService(self.llm, self.prompts)
+        self.viewpoint_extraction = ViewpointExtractionService(self.llm, self.prompts)
 
         self.claim_classifier = ClaimClassifier(self.llm, self.prompts)
         self.claim_centrality = ClaimCentralityAssigner(self.llm, self.prompts)
@@ -131,17 +152,33 @@ class ServiceContainer:
         self.salience_assigner = SalienceAssigner(self.llm, self.prompts)
         self.category_severity = CategorySeverityAssigner(self.llm, self.prompts)
         self.source_classifier = SourceClassifier(self.llm, self.prompts)
+        self.issue_classifier = IssueClassifier(self.llm, self.prompts)
+        self.issue_severity = IssueSeverityAssigner(self.llm, self.prompts)
+        self.applicability_classifier = ApplicabilityClassifier(self.llm, self.prompts)
+        self.stance_contract = StanceContractDetector(self.llm, self.prompts)
 
         self.claim_verification = ClaimVerificationJudge(self.llm, self.prompts)
         self.coverage_verification = CoverageVerificationJudge(self.llm, self.prompts)
         self.grounding_verification = GroundingVerificationJudge(self.llm, self.prompts)
         self.requirement_evaluation = RequirementEvaluationJudge(self.llm, self.prompts)
+        self.readability_review = ReadabilityReviewJudge(self.llm, self.prompts)
+        self.functional_repetition = FunctionalRepetitionJudge(self.llm, self.prompts)
+        self.task_fitness = TaskFitnessJudge(self.llm, self.prompts)
+        self.manipulation_verification = ManipulationVerificationJudge(
+            self.llm, self.prompts
+        )
+        self.balance_evaluation = BalanceEvaluationJudge(self.llm, self.prompts)
+        self.bias_detection = BiasDetectionStage(self.llm, self.prompts)
 
+        self.task_identification = TaskIdentificationStage(self.llm, self.prompts)
         self.claim_citation_mapper = ClaimCitationMapper(self.llm, self.prompts)
 
         self._extractor = DefaultContentExtractor(settings)
         self.input_router: InputRouter = DefaultInputRouter(self._extractor)
-        self.decision_engine = DecisionEngine(settings)
+        # The Decision Engine shares the engines' §5.10 Confidence Estimator, so
+        # a confidence figure in the report is combined by the same arithmetic
+        # that produced the per-dimension figures it combines.
+        self.decision_engine = DecisionEngine(settings, confidence=self.confidence)
 
         # Fail the boot rather than discover a missing dimension mid-audit: a
         # report is defined over all eight, and seven would be a verdict built
@@ -186,16 +223,28 @@ class ServiceContainer:
             self.claim_extraction,
             self.key_point_extraction,
             self.citation_extraction,
+            self.viewpoint_extraction,
             self.claim_classifier,
             self.claim_centrality,
             self.requirement_classifier,
             self.salience_assigner,
             self.category_severity,
             self.source_classifier,
+            self.issue_classifier,
+            self.issue_severity,
+            self.applicability_classifier,
+            self.stance_contract,
             self.claim_verification,
             self.coverage_verification,
             self.grounding_verification,
             self.requirement_evaluation,
+            self.readability_review,
+            self.functional_repetition,
+            self.task_fitness,
+            self.manipulation_verification,
+            self.balance_evaluation,
+            self.bias_detection,
+            self.task_identification,
             self.claim_citation_mapper,
         )
         missing = [
@@ -245,6 +294,7 @@ class ServiceContainer:
                 "claim_extraction": self.claim_extraction,
                 "key_point_extraction": self.key_point_extraction,
                 "citation_extraction": self.citation_extraction,
+                "viewpoint_extraction": self.viewpoint_extraction,
                 # Classification & Weighting (§5.2).
                 "claim_classifier": self.claim_classifier,
                 "claim_centrality": self.claim_centrality,
@@ -252,11 +302,23 @@ class ServiceContainer:
                 "salience_assigner": self.salience_assigner,
                 "category_severity": self.category_severity,
                 "source_classifier": self.source_classifier,
+                "issue_classifier": self.issue_classifier,
+                "issue_severity": self.issue_severity,
+                "applicability_classifier": self.applicability_classifier,
+                "stance_contract": self.stance_contract,
                 # Verification / Judge (§5.4).
                 "claim_verification": self.claim_verification,
                 "coverage_verification": self.coverage_verification,
                 "grounding_verification": self.grounding_verification,
                 "requirement_evaluation": self.requirement_evaluation,
+                "readability_review": self.readability_review,
+                "functional_repetition": self.functional_repetition,
+                "task_fitness": self.task_fitness,
+                "manipulation_verification": self.manipulation_verification,
+                "balance_evaluation": self.balance_evaluation,
+                "bias_detection": self.bias_detection,
+                # Engagement stage 2.
+                "task_identification": self.task_identification,
                 # Credibility stage 3.
                 "claim_citation_mapper": self.claim_citation_mapper,
             },
