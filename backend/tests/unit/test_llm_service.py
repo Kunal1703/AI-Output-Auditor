@@ -109,11 +109,46 @@ async def test_requests_json_object_not_json_schema(settings):
 
 
 async def test_reasoning_format_sent_when_configured(settings):
+    # Explicit "hidden" rather than settings.llm.reasoning_format: the deployed
+    # model is non-reasoning (llama-3.3-70b rejects the parameter), but the
+    # provider's job of forwarding it when a reasoning model *is* configured is
+    # what this asserts.
     counter = {"n": 0}
-    await call(service(responder(200, ok_body(), counter=counter), settings))
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(responder(200, ok_body(), counter=counter))
+    )
+    svc = DefaultLLMService(
+        GroqProvider(api_key="k", reasoning_format="hidden", client=client), settings
+    )
+    await call(svc)
     payload = json.loads(counter["last"].content)
-    # qwen3-32b emits a <think> block without this, corrupting the JSON.
+    # A reasoning model emits a <think> block without this, corrupting the JSON.
     assert payload.get("reasoning_format") == "hidden"
+
+
+async def test_reasoning_effort_sent_when_configured(settings):
+    """Symmetric to reasoning_format: forwarded when set, for a reasoning model."""
+    counter = {"n": 0}
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(responder(200, ok_body(), counter=counter))
+    )
+    svc = DefaultLLMService(
+        GroqProvider(api_key="k", reasoning_effort="none", client=client), settings
+    )
+    await call(svc)
+    assert json.loads(counter["last"].content).get("reasoning_effort") == "none"
+
+
+async def test_reasoning_params_omitted_by_default(settings):
+    """llama-3.3-70b 400s on either param; unset means the key is absent."""
+    counter = {"n": 0}
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(responder(200, ok_body(), counter=counter))
+    )
+    await call(DefaultLLMService(GroqProvider(api_key="k", client=client), settings))
+    payload = json.loads(counter["last"].content)
+    assert "reasoning_format" not in payload
+    assert "reasoning_effort" not in payload
 
 
 async def test_reasoning_format_omitted_when_unset(settings):
@@ -244,3 +279,85 @@ async def test_health_never_raises(settings):
     # A health probe that throws takes GET /health down with it.
     assert await service(boom, settings).health() is False
     assert await DefaultLLMService(GroqProvider(api_key=None), settings).health() is False
+
+
+# --------------------------------------------------------------------------- #
+# Model availability — startup validation catches a retired/unavailable model
+# --------------------------------------------------------------------------- #
+
+
+def models_body(*ids: str) -> dict:
+    return {"data": [{"id": i} for i in ids]}
+
+
+async def test_available_models_lists_served_ids():
+    def handle(request):
+        assert request.url.path.endswith("/models")
+        return httpx.Response(200, json=models_body("llama-3.3-70b-versatile", "x"))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    models = await GroqProvider(api_key="k", client=client).available_models()
+    assert models == {"llama-3.3-70b-versatile", "x"}
+
+
+@pytest.mark.parametrize("status", [401, 429, 500])
+async def test_available_models_is_none_on_error_status(status):
+    """'Cannot check' (None) must be distinct from 'nothing available' (set())."""
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(responder(status, {"error": {"message": "x"}}))
+    )
+    assert await GroqProvider(api_key="k", client=client).available_models() is None
+
+
+async def test_available_models_is_none_on_transport_error():
+    def boom(request):
+        raise httpx.ConnectError("no route", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(boom))
+    assert await GroqProvider(api_key="k", client=client).available_models() is None
+
+
+async def test_available_models_is_none_without_key():
+    assert await GroqProvider(api_key=None).available_models() is None
+
+
+def _container_stub(model: str, models):
+    """A minimal stand-in exposing only what verify_model reads."""
+    from types import SimpleNamespace
+
+    class _LLM:
+        async def available_models(self):
+            return models
+
+    return SimpleNamespace(
+        settings=SimpleNamespace(llm=SimpleNamespace(model=model, provider="groq")),
+        llm=_LLM(),
+    )
+
+
+async def test_verify_model_raises_when_model_unavailable():
+    """The M7.1 guarantee: a retired model fails startup, not eight audits."""
+    from app.app import ServiceContainer
+    from app.core.errors import ConfigurationError
+
+    stub = _container_stub("qwen/qwen3-32b", {"llama-3.3-70b-versatile"})
+    with pytest.raises(ConfigurationError) as raised:
+        await ServiceContainer.verify_model(stub)
+    # The message names both the bad id and the real options.
+    assert "qwen/qwen3-32b" in raised.value.message
+    assert "llama-3.3-70b-versatile" in raised.value.message
+
+
+async def test_verify_model_passes_when_model_available():
+    from app.app import ServiceContainer
+
+    stub = _container_stub("llama-3.3-70b-versatile", {"llama-3.3-70b-versatile", "x"})
+    await ServiceContainer.verify_model(stub)  # does not raise
+
+
+async def test_verify_model_skips_when_availability_unknown():
+    """Offline / unenumerable provider must not harden into a false failure."""
+    from app.app import ServiceContainer
+
+    stub = _container_stub("anything", None)
+    await ServiceContainer.verify_model(stub)  # does not raise

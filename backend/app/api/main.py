@@ -69,6 +69,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings: Settings | None = getattr(app.state, "settings_override", None)
     container = build_container(settings)
+    # Fail fast on a retired/unavailable model, before serving a single audit:
+    # a wrong model id degrades every dimension to Unable to Verify, and that is
+    # a startup misconfiguration, not a content verdict. Skips itself when
+    # availability cannot be checked (offline), so it never blocks on a blip.
+    await container.verify_model()
     app.state.container = container
     app.state.jobs = JobStore(retention_seconds=container.settings.jobs.retention_seconds)
     logger.info(

@@ -100,8 +100,10 @@ class LLMSettings(BaseModel):
         "Set via LLM_PROVIDER.",
     )
     model: str = Field(
-        default="qwen/qwen3-32b",
-        description="Provider-qualified model id. Set via LLM_MODEL.",
+        default="llama-3.3-70b-versatile",
+        description="Provider-qualified model id. Set via LLM_MODEL. Must be a "
+        "model the key is currently served (Groq retires models — "
+        "ServiceContainer.verify_model checks this at startup).",
     )
     temperature: float = Field(
         default=0.0,
@@ -112,6 +114,19 @@ class LLMSettings(BaseModel):
         "criterion).",
     )
     max_tokens: int = Field(default=4096, gt=0)
+    tokens_per_minute: int = Field(
+        default=0,
+        ge=0,
+        description="Client-side token-per-minute pacing cap for the LLM "
+        "Service. Hosted providers admit a request against prompt_tokens + "
+        "max_tokens and rate-limit on a rolling per-minute window, so a wave of "
+        "six concurrent engines bursts past a free-tier TPM the instant it "
+        "starts — the provider then 429s most of the wave and those dimensions "
+        "degrade (Document 4, §12), a rate limit misread as a verification gap. "
+        "Set this at or below the provider's TPM to pace requests and keep the "
+        "wave under the limit. 0 disables pacing (the default, for offline "
+        "tests and providers without a TPM ceiling).",
+    )
     timeout_seconds: float = Field(
         default=60.0,
         gt=0,
@@ -122,6 +137,17 @@ class LLMSettings(BaseModel):
         default=3, ge=0, description="Bounded retries for transient errors. Never infinite."
     )
     retry_backoff_seconds: float = Field(default=1.5, gt=0)
+    retry_after_cap_seconds: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Upper bound, in seconds, on how long a provider-supplied "
+        "Retry-After is honored. A per-minute token limit resets within ~60s, "
+        "but a provider under a concurrent burst can return a Retry-After far "
+        "longer than an engine's whole budget — honoring it verbatim then "
+        "guarantees a timeout and a degraded dimension for a limit that has "
+        "already cleared. Capping the wait at roughly one reset window lets the "
+        "retry land. 0 disables the cap (honor Retry-After verbatim).",
+    )
     reasoning_format: str | None = Field(
         default=None,
         description="Groq-only. 'hidden' suppresses a reasoning model's "
@@ -129,6 +155,17 @@ class LLMSettings(BaseModel):
         "engine pipelines parse. Valid only on reasoning models (the default "
         "qwen/qwen3-32b is one) — leave null for any other provider or model, "
         "since they reject the parameter.",
+    )
+    reasoning_effort: str | None = Field(
+        default=None,
+        description="Groq-only, reasoning models only. 'none' disables the "
+        "model's chain-of-thought entirely. For qwen/qwen3-32b that thinking is "
+        "generated, counted against the tokens-per-minute budget, then — with "
+        "reasoning_format 'hidden' — discarded, so on the free tier it was "
+        "~5x the token cost of the structured answer for no surfaced benefit "
+        "and pushed calls past max_tokens into truncation. 'none' makes the "
+        "engine stages' short JSON tasks small and fast. Leave null for any "
+        "non-reasoning model or other provider, which reject the parameter.",
     )
 
     # Populated from the environment, never from YAML.

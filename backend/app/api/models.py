@@ -150,6 +150,13 @@ class HealthResponse(BaseModel):
     llm_reachable: bool | None = Field(
         default=None, description="Whether the provider answered a probe."
     )
+    llm_model_available: bool | None = Field(
+        default=None,
+        description="Whether the configured model is one the key is currently "
+        "served. False means every audit will degrade to Unable to Verify — the "
+        "provider likely retired the model. None means it could not be checked "
+        "(offline, or a provider that cannot enumerate models).",
+    )
     engines_registered: int | None = Field(
         default=None, description="Registered engines. Should be 8."
     )

@@ -17,18 +17,65 @@ llm:
   # there, then set LLM_PROVIDER=openrouter and an OpenRouter-qualified
   # LLM_MODEL, and clear reasoning_format below (it is Groq-specific).
   provider: "groq"
-  model: "qwen/qwen3-32b"
+  # Groq retired qwen/qwen3-32b — completions 404 with "model does not exist or
+  # you do not have access to it", degrading every dimension. llama-3.3-70b-
+  # versatile is available on the current free tier, non-reasoning (so no
+  # reasoning params below, no wasted reasoning tokens, no json_object 400s), and
+  # has a 12000 TPM budget — double qwen's old 6000. Startup validation
+  # (ServiceContainer.verify_model) now fails fast if this id is not served, and
+  # GET /health reports llm_model_available. Overridden by LLM_MODEL in .env.
+  model: "llama-3.3-70b-versatile"
   temperature: 0.0
-  max_tokens: 4096
+
+  # Groq reserves the full max_tokens against its tokens-per-minute (TPM) budget
+  # at admission — a request "costs" prompt_tokens + max_tokens whether or not
+  # the model uses them, and in json_object mode a completion that hits the
+  # ceiling before the JSON closes is rejected outright (HTTP 400, "Failed to
+  # validate JSON"). With reasoning_effort disabled below, the engine stages
+  # emit small structured JSON (measured: ~325 completion tokens for claim
+  # extraction on the full trial output), so 1024 is ~3x headroom while keeping
+  # the per-request reservation honest for the pacing limiter. 4096 (the old
+  # value) reserved ~4x the tokens ever produced and, with six engines firing in
+  # wave 1, blew the free-tier 6000 TPM on the first burst — 429s that degraded a
+  # semi-random subset of dimensions to "Unable to Verify". Raise this only if a
+  # stage truncates on a very large input (finish_reason=length, or a repeated
+  # "Failed to validate JSON" 400, in the logs).
+  max_tokens: 1024
+
+  # Client-side TPM pacing. Held well below the model's free-tier ceiling (12000
+  # for llama-3.3-70b-versatile, per Groq's x-ratelimit-limit-tokens header) so
+  # the six-engine wave-1 burst plus prompt-estimate error still lands under the
+  # limit. Riding the edge (11000) let bursts touch the ceiling and drew
+  # 429s with inflated retry-after; 9000 leaves a ~3000-token cushion. 0
+  # disables pacing. See LLMSettings.tokens_per_minute.
+  tokens_per_minute: 9000
+
+  # Cap on how long a provider-supplied Retry-After is honored. Groq's token
+  # limit resets every minute (x-ratelimit-reset-tokens is sub-second to ~60s),
+  # but under a concurrent burst it can return a Retry-After of many minutes —
+  # longer than an engine's whole budget, so honoring it verbatim guarantees a
+  # timeout and a degraded dimension for a limit that has already cleared.
+  # Capping the wait at one reset window lets the retry actually land. 0 honors
+  # Retry-After verbatim (the default, for providers whose value is exact).
+  retry_after_cap_seconds: 45
+
   timeout_seconds: 60
   max_retries: 3
   retry_backoff_seconds: 1.5
 
-  # Groq-only. qwen3-32b is a reasoning model: left alone it emits a <think>
-  # block that corrupts the structured JSON the engine pipelines parse.
-  # "hidden" suppresses it. Set to null for any non-reasoning model or any
-  # other provider — they reject the parameter.
-  reasoning_format: "hidden"
+  # Groq reasoning-model parameters. BOTH must be null for llama-3.3-70b-
+  # versatile: it is not a reasoning model and returns HTTP 400 ("reasoning_
+  # format is not supported with this model") if either is sent. They are kept
+  # here, documented, for a fast switch back to a reasoning model:
+  #   - reasoning_format "hidden" suppresses a <think> block that would corrupt
+  #     the structured JSON the pipelines parse.
+  #   - reasoning_effort "none" disables the chain-of-thought outright — on
+  #     qwen3 that thinking was generated, charged to the TPM budget, then
+  #     discarded by "hidden", so ~5x the token cost of the answer for nothing.
+  # e.g. for qwen/qwen3.6-27b (the closest successor, 8000 TPM) set
+  # reasoning_format: "hidden" and reasoning_effort: "none".
+  reasoning_format: null
+  reasoning_effort: null
 
 embedding:
   provider: "local"
@@ -56,7 +103,15 @@ prompts:
 orchestrator:
   # Per-engine wall-clock budget. A timed-out engine yields a degraded,
   # low-confidence AuditResult rather than crashing the run (Document 4 §12).
-  engine_timeout_seconds: 120
+  #
+  # Sized to the LLM pacing above, not to raw call latency. Under llm.
+  # tokens_per_minute the six wave-1 engines share one token budget, so an
+  # engine's calls wait their turn and its wall-clock spans much of the wave.
+  # At 120s (the pre-pacing value) a correctly-waiting engine was killed and
+  # degraded — the very failure pacing exists to prevent. 480s clears a paced
+  # wave with margin. On a paid tier with a high TPM, pacing is off and engines
+  # finish in seconds, so this ceiling is never approached.
+  engine_timeout_seconds: 480
   max_parallel_engines: 8
 
 decision:

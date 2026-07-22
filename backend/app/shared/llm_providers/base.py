@@ -150,6 +150,25 @@ class LLMProvider(abc.ABC):
             True if the provider appears reachable and configured.
         """
 
+    async def available_models(self) -> set[str] | None:
+        """Return the set of model ids this key may currently use, if knowable.
+
+        Backs startup model validation (``ServiceContainer.verify_model``): a
+        provider that retires or renames a model turns every audit into
+        *Unable to Verify*, and the honest place to catch that is before the
+        first audit, not inside eight degraded dimensions.
+
+        Returns:
+            The available model ids, or ``None`` when the provider cannot
+            enumerate them (no such endpoint, or the probe failed). ``None`` is
+            deliberately distinct from an empty set: "could not check" must not
+            be mistaken for "nothing is available", so the caller skips
+            validation rather than blocking a run over a transient network
+            error. Must not raise — like :meth:`health`, this is a readiness
+            probe.
+        """
+        return None
+
     async def aclose(self) -> None:
         """Release transport resources.
 

@@ -59,6 +59,7 @@ def _build_groq(settings: Settings) -> LLMProvider:
         api_key=key.get_secret_value() if key else None,
         base_url=settings.llm.base_url,
         reasoning_format=settings.llm.reasoning_format,
+        reasoning_effort=settings.llm.reasoning_effort,
     )
 
 

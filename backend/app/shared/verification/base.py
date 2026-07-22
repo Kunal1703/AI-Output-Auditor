@@ -241,10 +241,21 @@ class LLMJudge(LLMStage, Generic[UnitT, VerdictT]):
             self._prompt_variables(units_json, evidence_block, **kwargs),
             self._response_schema(),
         )
-        return self.build_judgments(units, records)
+        # A judge may cite only evidence it was actually shown. Passing the shown
+        # ids lets build_judgments drop anything the model invented — a model
+        # handed no evidence (Relevance's requirement eval) will otherwise return
+        # quote text in evidence_ids, which then rides into a finding's
+        # evidence_refs and fails the AuditResult contract, degrading the whole
+        # dimension. An empty set here means "cite nothing", which is correct.
+        return self.build_judgments(
+            units, records, valid_evidence_ids={e.evidence_id for e in evidence}
+        )
 
     def build_judgments(
-        self, units: Sequence[UnitT], records: Sequence[dict[str, Any]]
+        self,
+        units: Sequence[UnitT],
+        records: Sequence[dict[str, Any]],
+        valid_evidence_ids: set[str] | None = None,
     ) -> tuple[Judgment[UnitT, VerdictT], ...]:
         """Match the model's records to units by id and build the judgments.
 
@@ -257,6 +268,10 @@ class LLMJudge(LLMStage, Generic[UnitT, VerdictT]):
         Args:
             units: The units judged, in their original order.
             records: The model's records, each keyed by an ``id``.
+            valid_evidence_ids: The ids the judge was shown. When provided,
+                model-cited evidence ids outside this set are dropped, so a
+                hallucinated id never reaches a finding's ``evidence_refs``.
+                ``None`` disables the check for callers that supply no evidence.
 
         Returns:
             One :class:`Judgment` per unit, in the original order.
@@ -288,14 +303,26 @@ class LLMJudge(LLMStage, Generic[UnitT, VerdictT]):
             refs = record.get("evidence_ids")
             hint = record.get("confidence")
 
+            # Keep only ids the judge was actually shown. ``None`` disables the
+            # check for direct callers that pass no evidence set (Readability,
+            # Diversity), preserving their existing behavior; the four verdict
+            # judges always pass one, so a model-invented id — an id absent from
+            # the evidence, or worse, a raw quote — never reaches a finding's
+            # evidence_refs and never fails the AuditResult contract.
+            clean_refs = tuple(
+                r
+                for r in (refs or [])
+                if isinstance(r, str)
+                and r.strip()
+                and (valid_evidence_ids is None or r in valid_evidence_ids)
+            )
+
             judgments.append(
                 Judgment(
                     unit=unit,
                     verdict=verdict,
                     rationale=rationale.strip() if isinstance(rationale, str) else "",
-                    evidence_refs=tuple(
-                        r for r in (refs or []) if isinstance(r, str) and r.strip()
-                    ),
+                    evidence_refs=clean_refs,
                     confidence_hint=(
                         min(1.0, max(0.0, float(hint)))
                         if isinstance(hint, (int, float)) and not isinstance(hint, bool)

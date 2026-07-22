@@ -26,6 +26,7 @@ import asyncio
 import json
 import random
 import re
+import time
 from typing import Any, Sequence
 
 from app.core.config import Settings
@@ -120,6 +121,18 @@ class LLMService(abc.ABC):
     async def health(self) -> bool:
         """Report whether the underlying provider looks usable."""
 
+    async def available_models(self) -> set[str] | None:
+        """Return the model ids the provider will currently serve, if knowable.
+
+        Delegates to the provider. Returns ``None`` when the set cannot be
+        determined — no enumeration endpoint, or the probe failed — so the
+        caller distinguishes "cannot check" from a real empty list and does not
+        block a run over a transient failure. The default suits fakes and any
+        service whose provider cannot enumerate; the production service
+        overrides it.
+        """
+        return None
+
     async def aclose(self) -> None:
         """Release provider resources on shutdown."""
         return None
@@ -130,6 +143,68 @@ class BaseLLMService(LLMService):
 
     Type annotations that want "any LLM service" should use :class:`LLMService`.
     """
+
+
+class _TokenRateLimiter:
+    """Paces provider calls to stay under a tokens-per-minute ceiling.
+
+    **Why this lives in the service, not the engines.** Groq — like most hosted
+    providers — admits a request against ``prompt_tokens + max_tokens`` and rate
+    limits on a rolling per-minute window. The orchestrator fires six engines
+    concurrently in wave 1 (Document 2, §8), and each fires several stage calls,
+    so the instant a run starts the demand spikes far above a free-tier TPM. The
+    provider answers with 429s, and the engines — correctly — read a provider
+    failure as a verification gap and degrade (Document 4, §12). The result is a
+    report where a semi-random subset of trust dimensions reads *Unable to
+    Verify* for no reason but a rate limit. Pacing is the missing integration
+    piece: it turns the burst into orderly waiting so the calls actually land.
+
+    A continuously-refilling bucket holds ``capacity`` tokens and refills at
+    ``capacity / 60`` tokens per second. Each call reserves an estimate of the
+    tokens it will cost — ``prompt_tokens + max_tokens``, matching the provider's
+    own admission accounting — and waits when the bucket is short. The
+    reservation is deliberately conservative: it is never smaller than the
+    request's actual usage, so the client bucket drains at least as fast as the
+    provider's window fills and a run paced under ``capacity`` does not 429.
+
+    Shared across every engine because it is constructed once with the
+    application-scoped LLM Service; the budget it guards is the one shared
+    provider account, so one limiter per process is exactly right.
+
+    Note:
+        Not thread-safe by design — engines run as asyncio tasks on one event
+        loop. The lock serializes only the bucket read-modify-write, which never
+        awaits, so it cannot become a bottleneck of its own.
+    """
+
+    def __init__(self, tokens_per_minute: int) -> None:
+        self._capacity = float(tokens_per_minute)
+        self._rate = tokens_per_minute / 60.0
+        self._available = float(tokens_per_minute)
+        self._updated = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, tokens: int) -> None:
+        """Wait until ``tokens`` of budget are available, then consume them.
+
+        A single request larger than the whole per-minute budget cannot be
+        satisfied outright; it waits for a full bucket and proceeds rather than
+        deadlocking, since refusing it would strand a legitimate call forever.
+        """
+        need = min(float(tokens), self._capacity)
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                self._available = min(
+                    self._capacity,
+                    self._available + (now - self._updated) * self._rate,
+                )
+                self._updated = now
+                if self._available >= need:
+                    self._available -= need
+                    return
+                wait = (need - self._available) / self._rate
+            await asyncio.sleep(wait)
 
 
 class DefaultLLMService(LLMService):
@@ -150,6 +225,10 @@ class DefaultLLMService(LLMService):
     def __init__(self, provider: LLMProvider, settings: Settings) -> None:
         self._provider = provider
         self._settings = settings
+        tpm = settings.llm.tokens_per_minute
+        # None when pacing is disabled (tpm <= 0), so the common paid-tier path
+        # pays nothing — no lock, no bookkeeping, calls go straight through.
+        self._rate_limiter = _TokenRateLimiter(tpm) if tpm > 0 else None
 
     def _build_request(
         self,
@@ -170,6 +249,21 @@ class DefaultLLMService(LLMService):
             json_schema=json_schema,
             timeout_seconds=timeout_seconds or cfg.timeout_seconds,
         )
+
+    @staticmethod
+    def _estimate_tokens(request: CompletionRequest) -> int:
+        """Estimate a request's token cost for pacing.
+
+        Matches the provider's admission accounting: ``prompt_tokens +
+        max_tokens``. The prompt half is estimated at ~4 characters per token —
+        the standard rough factor for English — which is imprecise but only ever
+        needs to be good enough to keep the wave under the ceiling; the limiter's
+        budget already sits below the true limit to absorb the slack. A small
+        constant covers per-message role overhead.
+        """
+        chars = sum(len(message.content) for message in request.messages)
+        prompt_estimate = chars // 4 + 16
+        return prompt_estimate + request.max_tokens
 
     async def _complete_with_retries(
         self, request: CompletionRequest
@@ -197,6 +291,11 @@ class DefaultLLMService(LLMService):
 
         for attempt in range(cfg.max_retries + 1):
             try:
+                # Pace before every attempt: a retry is a fresh call that costs
+                # the provider tokens too, so it must wait its turn like any
+                # other. No-op when pacing is disabled.
+                if self._rate_limiter is not None:
+                    await self._rate_limiter.acquire(self._estimate_tokens(request))
                 return await self._provider.complete(request)
             except ProviderError as exc:
                 last_error = exc
@@ -219,7 +318,14 @@ class DefaultLLMService(LLMService):
                 delay = cfg.retry_backoff_seconds * (2**attempt)
                 delay *= 0.5 + random.random()  # noqa: S311 — jitter, not crypto
                 if exc.retry_after is not None:
-                    delay = max(delay, exc.retry_after)
+                    # Honor Retry-After as a floor, but cap it: under a burst a
+                    # provider can name a wait longer than the engine's whole
+                    # budget for a limit that resets within a minute, which would
+                    # turn a transient 429 into a guaranteed timeout+degrade.
+                    retry_after = exc.retry_after
+                    if cfg.retry_after_cap_seconds > 0:
+                        retry_after = min(retry_after, cfg.retry_after_cap_seconds)
+                    delay = max(delay, retry_after)
                 logger.warning(
                     "llm call failed; retrying",
                     extra=bind(
@@ -320,6 +426,17 @@ class DefaultLLMService(LLMService):
                 extra=bind(provider=self._provider.name, error=str(exc)),
             )
             return False
+
+    async def available_models(self) -> set[str] | None:
+        """Return the provider's currently-served model ids, or None. Never raises."""
+        try:
+            return await self._provider.available_models()
+        except Exception as exc:  # a readiness probe must not take startup down
+            logger.warning(
+                "llm models probe raised",
+                extra=bind(provider=self._provider.name, error=str(exc)),
+            )
+            return None
 
     async def aclose(self) -> None:
         """Close the underlying provider."""

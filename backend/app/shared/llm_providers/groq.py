@@ -63,6 +63,9 @@ class GroqProvider(LLMProvider):
             or ``raw``. ``hidden`` keeps a reasoning model's ``<think>`` block
             out of the response body. ``None`` omits the parameter entirely,
             which is required for non-reasoning models that reject it.
+        reasoning_effort: Groq's reasoning-effort control — ``none`` disables a
+            reasoning model's chain-of-thought outright. ``None`` omits the
+            parameter (required for non-reasoning models, which reject it).
         client: Inject a client to test without network access.
     """
 
@@ -73,11 +76,13 @@ class GroqProvider(LLMProvider):
         api_key: str | None,
         base_url: str | None = None,
         reasoning_format: str | None = None,
+        reasoning_effort: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self._reasoning_format = reasoning_format
+        self._reasoning_effort = reasoning_effort
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(60.0))
         self._owns_client = client is None
 
@@ -101,6 +106,9 @@ class GroqProvider(LLMProvider):
 
         if self._reasoning_format is not None:
             payload["reasoning_format"] = self._reasoning_format
+
+        if self._reasoning_effort is not None:
+            payload["reasoning_effort"] = self._reasoning_effort
 
         if request.json_schema is not None:
             # json_object, not json_schema: Groq supports the latter only on
@@ -216,6 +224,43 @@ class GroqProvider(LLMProvider):
         except httpx.HTTPError as exc:
             logger.warning("groq health probe failed", extra=bind(error=str(exc)))
             return False
+
+    async def available_models(self) -> set[str] | None:
+        """Return the model ids this key may use, or None if it cannot be read.
+
+        Groq's ``/models`` lists exactly the models the key is entitled to, and
+        Groq *retires* models — ``qwen/qwen3-32b`` was served and then began
+        404ing. This is what lets startup validation catch a dead model id
+        before an audit rather than after eight degraded dimensions.
+
+        Never raises (a readiness probe must not): a missing key, an error
+        status, or a transport failure all yield ``None`` — "cannot check" —
+        which the caller treats as "do not block", distinct from a real empty
+        list.
+        """
+        if not self._api_key:
+            return None
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/models",
+                headers=self._headers(),
+                timeout=10.0,
+            )
+            if response.status_code >= 400:
+                logger.warning(
+                    "groq models probe returned an error status",
+                    extra=bind(status_code=response.status_code),
+                )
+                return None
+            data = response.json().get("data") or []
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("groq models probe failed", extra=bind(error=str(exc)))
+            return None
+        return {
+            entry["id"]
+            for entry in data
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        }
 
     async def aclose(self) -> None:
         """Close the HTTP client, if this provider created it."""

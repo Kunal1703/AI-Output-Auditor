@@ -150,6 +150,13 @@ class LLMStage(abc.ABC):
 
         if isinstance(payload, list):
             candidate: list[Any] = payload
+        elif isinstance(payload, dict) and not payload:
+            # An empty object means "no records" — a legitimate answer for a
+            # mapping or verdict stage with nothing to report (an article with
+            # no citations to map, say). Raising here degrades the dimension
+            # over the model's most honest possible response; an empty list is
+            # what it meant, and the caller already handles "nothing extracted".
+            candidate = []
         elif isinstance(payload, dict):
             for name in (wanted, "items", "results", "units", "verdicts"):
                 value = payload.get(name)

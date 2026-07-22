@@ -35,6 +35,7 @@ from app.audit_engines.registry import (
 )
 from app.audit_engines.orchestrator import EngineOrchestrator
 from app.core.config import Settings, load_settings
+from app.core.errors import ConfigurationError
 from app.core.logging import bind, configure_logging, get_logger
 from app.decision_engine.workflow import DecisionEngine
 from app.preprocessing.content_extractor import DefaultContentExtractor
@@ -335,19 +336,65 @@ class ServiceContainer:
         """
         return EngineOrchestrator(build_engines(self.engine_services(run_id)))
 
+    async def verify_model(self) -> None:
+        """Fail fast if the configured model is not one the provider will serve.
+
+        Providers retire models: ``qwen/qwen3-32b`` was served and then began
+        returning 404, which turned every audit into eight degraded dimensions
+        and an *Unable to Verify* report — a misconfiguration masquerading as a
+        content verdict. The honest place to catch it is startup, before the
+        first audit, with a message that names the models the key actually has.
+
+        Called from the app lifespan after the container is built. Skips
+        silently when availability cannot be determined (offline, or a provider
+        with no model endpoint): "cannot check" must never harden into a false
+        startup failure, and the run then degrades gracefully as before if the
+        model really is gone.
+
+        Raises:
+            ConfigurationError: The provider enumerated its models and the
+                configured one is definitively absent.
+        """
+        configured = self.settings.llm.model
+        models = await self.llm.available_models()
+        if models is None:
+            logger.warning(
+                "could not verify LLM model availability; proceeding",
+                extra=bind(provider=self.settings.llm.provider, model=configured),
+            )
+            return
+        if configured not in models:
+            raise ConfigurationError(
+                f"Configured LLM model {configured!r} is not available to the "
+                f"{self.settings.llm.provider!r} key. Available models: "
+                f"{', '.join(sorted(models))}. Set LLM_MODEL in backend/.env (or "
+                "llm.model in config/settings.yaml) to one of these."
+            )
+        logger.info(
+            "llm model verified as available",
+            extra=bind(provider=self.settings.llm.provider, model=configured),
+        )
+
     async def health(self) -> dict[str, object]:
         """Collect readiness facts for ``GET /health`` (Document 4, §7).
 
         Returns:
-            Provider identity, configuration state, provider reachability, and
-            embedding-cache effectiveness.
+            Provider identity, configuration state, provider reachability,
+            whether the configured model is actually served, and embedding-cache
+            effectiveness.
         """
         cache = self.embeddings.cache_stats
+        models = await self.llm.available_models()
+        # None -> could not enumerate; True/False only when we actually know.
+        model_available = (
+            None if models is None else self.settings.llm.model in models
+        )
         return {
             "llm_provider": self.settings.llm.provider,
             "llm_model": self.settings.llm.model,
             "llm_configured": self.settings.llm_configured,
             "llm_reachable": await self.llm.health(),
+            "llm_model_available": model_available,
             "engines_registered": len(registered_dimensions()),
             "embedding_model": self.settings.embedding.model,
             "embedding_cache_enabled": self.settings.embedding.cache_enabled,
