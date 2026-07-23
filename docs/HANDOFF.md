@@ -6,6 +6,38 @@
 
 **Read this document first, then Documents 1–4 in `docs/`.** This document tells you what exists and why; Documents 1–4 are the frozen specification and win any disagreement.
 
+> ### ⚙️ Production hardening update (M7.1–M7.4)
+>
+> The body of this handoff is the original build record. These operational facts
+> supersede it where they conflict (no architecture changed):
+>
+> - **LLM model is now `llama-3.3-70b-versatile`, not `qwen/qwen3-32b`.** Groq
+>   retired qwen3-32b (completions 404'd). llama-3.3-70b is non-reasoning, so
+>   `reasoning_format` and `reasoning_effort` are `null` (Groq 400s if either is
+>   sent to a non-reasoning model). Closest reasoning successor if switching back:
+>   `qwen/qwen3.6-27b` with `reasoning_format: hidden` + `reasoning_effort: none`.
+> - **Startup model validation** (`ServiceContainer.verify_model`, called in the
+>   app lifespan) fails fast if `llm.model` is not served; `/health` reports
+>   `llm_model_available`.
+> - **Free-tier pacing.** A client-side token limiter (`llm.tokens_per_minute`),
+>   `max_tokens: 1024`, and `retry_after_cap_seconds` keep the eight-engine wave
+>   under Groq's per-minute limit. The **per-day** limit (TPD ≈ 100k) caps usage
+>   to ~3–6 reference-heavy audits/day; a full audit takes a few minutes by
+>   design. A paid tier removes this (`tokens_per_minute: 0`).
+> - **Two correctness fixes.** (1) An LLM judge may cite only evidence it was
+>   shown (`shared/verification/base.py`), and an empty `{}` response is "no
+>   records", not an error (`shared/llm_stage.py`). (2) A `must_contain` substring
+>   *miss* no longer overrides a semantic "Satisfied" into a false trust-gating
+>   "Violated" (`audit_engines/relevance.py`) — it was producing false *Untrusted*
+>   verdicts on good content.
+> - **Input validation.** File uploads strip YAML front matter; whitespace-only
+>   text is rejected 422.
+> - **Known boundary (by design):** content submitted **without a reference
+>   source** routes to *Unable to Verify* — Coverage (trust-relevant, no N/A)
+>   returns a verification gap and Accuracy can't verify claims without evidence.
+>   Provide a `reference_source` (or enable external retrieval) for a definite
+>   trust verdict.
+
 ---
 
 ## Table of contents

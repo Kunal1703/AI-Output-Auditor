@@ -195,12 +195,15 @@ const POLL_INTERVAL_MS = 700;
  * How long to keep polling before giving up.
  *
  * Generous on purpose. A real audit makes many LLM calls across eight engines,
- * and each engine has its own 120s budget before the orchestrator degrades it.
- * A client that gave up sooner would report a failure for a run the backend is
- * about to finish — and the report would still be retrievable by id, which
- * makes the timeout a lie about the system rather than a fact about it.
+ * and on Groq's free tier the LLM Service paces those calls under the
+ * per-minute token limit (see `llm.tokens_per_minute`), so a full run takes a
+ * few minutes and a reference-heavy one can approach the per-engine budget
+ * (`orchestrator.engine_timeout_seconds`, 480s). 15 minutes clears that with
+ * margin. A client that gave up sooner would report a failure for a run the
+ * backend is about to finish — and the report is still retrievable by id, which
+ * makes a premature timeout a lie about the system rather than a fact about it.
  */
-const POLL_TIMEOUT_MS = 8 * 60 * 1000;
+const POLL_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
  * Poll a job to completion, reporting real engine progress as it goes.

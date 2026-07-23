@@ -287,6 +287,20 @@ class RelevanceAuditEngine(AuditEngine):
         a reader can see that the judge said "satisfied" and the counter said
         470 words against a 200-word limit. Hiding that would make the ledger
         misrepresent how the verdict was reached.
+
+        **A ``must_contain`` miss is the one check that does not override.** The
+        override rule rests on the validator being able to *answer* the
+        requirement, and a literal substring search cannot answer a semantic
+        instruction. The classifier sometimes renders "report on the congestion
+        pricing vote" as ``must_contain: "congestion pricing vote"``; an article
+        that reports the vote as "the congestion charge … the 7-4 vote" satisfies
+        the instruction while lacking that exact phrase. The judge assessed that
+        correctly, and letting a brittle substring miss overrule it into a
+        trust-gating *Violated hard requirement* manufactures a false *Untrusted*
+        — unearned condemnation, which Document 3 §13's fail-safe forbids exactly
+        as it forbids unearned trust. Length, format, language, and
+        ``must_not_contain`` (a *present* forbidden term is a definite fact) stay
+        authoritative; only a ``must_contain`` miss defers to the judge.
         """
         by_kind = {check.check: check for check in checks}
         if not by_kind:
@@ -297,6 +311,12 @@ class RelevanceAuditEngine(AuditEngine):
             kind = judgment.unit.attributes.get("constraint_kind")
             check = by_kind.get(kind) if isinstance(kind, str) else None
             if check is None:
+                updated.append(judgment)
+                continue
+
+            if check.check == "must_contain" and not check.passed:
+                # Not authoritative for a semantic requirement — keep the judge's
+                # verdict rather than flip it to a false, trust-gating Violated.
                 updated.append(judgment)
                 continue
 

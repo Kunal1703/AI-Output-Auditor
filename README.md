@@ -83,7 +83,7 @@ That is the honest answer for an auditor that cannot reach a model, not a crash.
 cd backend
 python -m venv .venv
 
-.venv\Scriptsctivate            # Windows
+.venv\Scripts\activate            # Windows
 source .venv/bin/activate          # macOS / Linux
 
 pip install -r requirements-m2.txt  # includes requirements.txt; pulls torch — a few minutes
@@ -109,15 +109,18 @@ curl http://127.0.0.1:8000/health
 ```
 
 ```json
-{ "status": "ok", "llm_provider": "groq", "llm_model": "qwen/qwen3-32b",
+{ "status": "ok", "llm_provider": "groq", "llm_model": "llama-3.3-70b-versatile",
   "version": "1.0", "llm_configured": true, "llm_reachable": true,
+  "llm_model_available": true,
   "engines_registered": 8, "prompt_templates": 27,
   "embedding_model": "all-MiniLM-L6-v2",
   "embedding_cache_enabled": true, "embedding_cache_hit_rate": 0.0 }
 ```
 
 `engines_registered: 8` and `prompt_templates: 27` confirm the system wired up.
-`llm_configured: false` means no key — the Navbar shows it as a status dot,
+`llm_model_available: false` means the configured model is not one your key is
+served (Groq retires models) — startup validation catches that, and every audit
+would otherwise degrade. `llm_configured: false` means no key — the Navbar shows it as a status dot,
 because a backend that cannot reach its provider degrades every trust dimension
 and returns *Unable to Verify* for everything. That is correct behavior, but you
 should be able to see **why**.
@@ -162,14 +165,18 @@ Two environment spellings, both supported:
 ```bash
 GROQ_API_KEY=gsk_...          # https://console.groq.com/keys
 LLM_PROVIDER=groq
-LLM_MODEL=qwen/qwen3-32b
+LLM_MODEL=llama-3.3-70b-versatile
 ```
 
 Thresholds and weights are **configuration, not code**. Retuning one moves where a line sits; it can never change the rules themselves — a qualifying critical finding always gates trust, and insufficient confidence always blocks a *Trusted* verdict.
 
 ### LLM provider
 
-**Groq is active** (`app/shared/llm_providers/groq.py`), on the free tier. The default model `qwen/qwen3-32b` is a reasoning model, so `llm.reasoning_format: hidden` in `settings.yaml` suppresses its `<think>` block — without that it corrupts the structured JSON the engine pipelines parse.
+**Groq is active** (`app/shared/llm_providers/groq.py`), on the free tier. The model is `llama-3.3-70b-versatile` — a non-reasoning model, so `llm.reasoning_format` and `llm.reasoning_effort` are both `null` in `settings.yaml` (Groq returns a 400 if either is sent to a non-reasoning model). For a reasoning model such as `qwen/qwen3.6-27b` instead, set `reasoning_format: hidden` and `reasoning_effort: none` — the settings comments document both paths.
+
+**The free tier is the binding constraint, and the config is tuned for it.** Groq admits a request against `prompt_tokens + max_tokens` and rate-limits on both a per-minute (TPM) and a per-day (TPD ≈ 100k) budget. So the config paces itself (`llm.tokens_per_minute`, `max_tokens: 1024`, `retry_after_cap_seconds`) rather than bursting past the limit — a full eight-engine audit takes **a few minutes** by design, and roughly **3–6 reference-heavy audits fit per day** before the daily budget is spent. This is pacing, not a hang. A paid tier removes it: set `tokens_per_minute: 0` and raise `max_tokens`.
+
+**Startup validates the model.** If `llm.model` is not one your key is currently served, the app fails to start with a clear message listing the available models, and `/health` reports `llm_model_available`. This turns a retired-model 404 into an obvious configuration error instead of eight silently-degraded dimensions.
 
 The API key is resolved **per provider** (`GROQ_API_KEY` for Groq, `OPENROUTER_API_KEY` for OpenRouter), so adding a paid provider later means adding its key alongside the one you already have, not renaming it.
 
@@ -179,7 +186,7 @@ The OpenRouter provider is fully written and ships **commented out**:
 
 1. Uncomment the two `PAID PROVIDER` blocks in `app/shared/llm_providers/registry.py`.
 2. Uncomment `OPENROUTER_API_KEY` / `LLM_PROVIDER` / `LLM_MODEL` in `backend/.env` and add your key.
-3. Set `reasoning_format: null` in `config/settings.yaml` — it is Groq-specific.
+3. Keep `reasoning_format` and `reasoning_effort` `null` in `config/settings.yaml` — both are Groq-specific.
 
 No engine, service, or Decision Engine code changes. That is the provider seam doing its job.
 
