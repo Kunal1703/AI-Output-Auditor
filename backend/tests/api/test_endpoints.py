@@ -132,6 +132,14 @@ def test_invalid_requests_are_rejected(client, payload):
     assert "error" in response.json()
 
 
+@pytest.mark.parametrize("text", ["", "   ", "\n\n\t "], ids=["empty", "spaces", "newlines"])
+def test_whitespace_only_text_is_rejected(client, text):
+    """`min_length=1` admits `"   "`, which strips to an audit of nothing."""
+    response = client.post("/audit/text", json={"text": text})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
 def test_file_upload_rejects_an_unsupported_format(client):
     response = client.post(
         "/audit/file",

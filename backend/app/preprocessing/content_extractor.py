@@ -51,6 +51,11 @@ _HTML_SUFFIXES = frozenset({".html", ".htm"})
 
 _WHITESPACE_RUNS = re.compile(r"\n{3,}")
 
+#: YAML front matter: a ``---`` fence on the first line, its content, and a
+#: closing ``---`` fence, all before the document body. Anchored to the start so
+#: a ``---`` horizontal rule mid-document is never mistaken for it.
+_FRONT_MATTER = re.compile(r"^﻿?---[ \t]*\n.*?\n---[ \t]*(?:\n|$)", re.DOTALL)
+
 
 @dataclass(frozen=True)
 class ExtractedContent:
@@ -232,6 +237,7 @@ class DefaultContentExtractor(ContentExtractor):
             )
 
         suffix = PurePosixPath(filename).suffix.lower()
+        front_matter_stripped = False
 
         if suffix in _PDF_SUFFIXES:
             text, extractor = await asyncio.to_thread(_extract_pdf, data, filename)
@@ -244,6 +250,7 @@ class DefaultContentExtractor(ContentExtractor):
             not suffix and (content_type or "").startswith("text/")
         ):
             text, extractor = _decode_text(data), "plain"
+            text, front_matter_stripped = _strip_front_matter(text)
             title = _first_markdown_heading(text)
         else:
             raise UnsupportedInputError(
@@ -276,6 +283,7 @@ class DefaultContentExtractor(ContentExtractor):
                 "characters": len(text),
                 "bytes": len(data),
                 "content_type": content_type,
+                "front_matter_stripped": front_matter_stripped,
             },
         )
 
@@ -309,6 +317,30 @@ def _decode_text(data: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return data.decode("utf-8", errors="replace")
+
+
+def _strip_front_matter(text: str) -> tuple[str, bool]:
+    """Remove a leading YAML front-matter block from a text/markdown document.
+
+    Markdown from static-site generators (and this project's own corpus) opens
+    with a ``---`` … ``---`` metadata block. It is *metadata about* the document,
+    not the document — auditing it means Readability judging ``tier: good`` and
+    Relevance measuring against ``id:`` lines, a confident report about the wrong
+    text. Stripping it is container normalization, not content editing (the
+    body is untouched); the router's rule is "normalize the container, leave the
+    content alone", and front matter is container.
+
+    Only a block that opens the document is removed, so a ``---`` horizontal rule
+    between paragraphs is never touched.
+
+    Returns:
+        ``(body, stripped)`` — the document without its front matter, and whether
+        any was present.
+    """
+    match = _FRONT_MATTER.match(text)
+    if not match:
+        return text, False
+    return text[match.end() :].lstrip("\n"), True
 
 
 def _first_markdown_heading(text: str) -> str | None:

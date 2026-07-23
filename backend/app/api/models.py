@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.shared.schemas import JobStatus
 
@@ -56,6 +56,20 @@ class AuditTextRequest(BaseModel):
         "and Diversity. Without it those engines have no stated intent to "
         "measure against.",
     )
+
+    @field_validator("text")
+    @classmethod
+    def _text_not_blank(cls, value: str) -> str:
+        """Reject whitespace-only text.
+
+        ``min_length=1`` admits ``"   "``, which preprocessing then strips to an
+        empty string — an audit of nothing that returns eight confident verdicts
+        about no content. Rejecting it here turns a silent degenerate run into a
+        clear 422.
+        """
+        if not value.strip():
+            raise ValueError("text must contain non-whitespace content.")
+        return value
     reference_source: str | None = Field(
         default=None,
         description="Ground-truth text. Optional for Accuracy; **Coverage "

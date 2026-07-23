@@ -225,6 +225,40 @@ async def test_file_rejections(settings, filename, data, error):
         await ex.from_file(filename, data)
 
 
+async def test_markdown_front_matter_is_stripped(settings):
+    """YAML front matter is metadata about the document, not the document.
+
+    Auditing it means Readability judging ``tier: good`` and Relevance measuring
+    against ``id:`` lines — a confident report about the wrong text.
+    """
+    ex = DefaultContentExtractor(settings, client=client_for(serve()))
+    doc = (
+        b"---\n"
+        b"id: sample-1\n"
+        b"tier: good\n"
+        b"prompt: Explain rate limiting.\n"
+        b"---\n\n"
+        b"# Rate limiting\n\n" + PROSE
+    )
+    got = await ex.from_file("sample.md", doc)
+    assert not got.text.lstrip().startswith("---")
+    assert "tier: good" not in got.text
+    assert "id: sample-1" not in got.text
+    assert "token bucket" in got.text          # the body survives intact
+    assert got.title == "Rate limiting"        # heading below the block still found
+    assert got.metadata["front_matter_stripped"] is True
+
+
+async def test_horizontal_rule_is_not_mistaken_for_front_matter(settings):
+    """A ``---`` between paragraphs is content, not a front-matter fence."""
+    ex = DefaultContentExtractor(settings, client=client_for(serve()))
+    doc = b"# Title\n\n" + PROSE + b"\n\n---\n\nA second section after a rule.\n"
+    got = await ex.from_file("doc.md", doc)
+    assert "A second section" in got.text
+    assert got.metadata["front_matter_stripped"] is False
+    assert "token bucket" in got.text
+
+
 # --------------------------------------------------------------------------- #
 # Router
 # --------------------------------------------------------------------------- #
