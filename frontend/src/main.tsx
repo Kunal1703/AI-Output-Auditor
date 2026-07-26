@@ -1,13 +1,11 @@
-/**
- * Frontend entry point.
- *
- * Mounts the router and the app into `#root`.
- */
+/** Frontend entry point — providers, router, and mount. */
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { ThemeProvider } from '@/lib/theme';
+import { AuditProvider } from '@/lib/store';
 import './index.css';
 
 const root = document.getElementById('root');
@@ -17,8 +15,12 @@ if (!root) {
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <AuditProvider>
+          <App />
+        </AuditProvider>
+      </BrowserRouter>
+    </ThemeProvider>
   </React.StrictMode>,
 );

@@ -139,6 +139,54 @@ numeric:
   # Relative difference at/above which a mismatch escalates MAJOR -> CRITICAL.
   major_relative_difference: 0.10
 
+# Coverage evaluator (AI Output Auditor, MB3). Derived from the MB2 attribution
+# map — no new retrieval or NLI. Held separately from engines.coverage (legacy)
+# so the new pipeline never reaches into the legacy one.
+coverage:
+  # Salience floor at which a missing key point becomes a Missing-Critical-Fact
+  # finding; below it an omission is a score effect (protects summarization).
+  critical_omission_salience: 0.70
+  partial_credit: 0.5
+  # Salience at/above which a missing critical fact is CRITICAL not MAJOR.
+  critical_severity_salience: 0.85
+
+# Meaning Preservation evaluator (MB3). Holistic distortion derived from the
+# MB2/MB3 signals (attribution contradictions + salient coverage loss); no LLM.
+meaning:
+  # Penalty per source-contradicting output claim (a reversal distorts meaning).
+  contradiction_penalty: 0.30
+  # Penalty per dropped high-salience key point (lost essential context).
+  context_loss_penalty: 0.10
+
+# Bias / Objectivity evaluator (MB3). Measured relative to the source: loaded or
+# subjective language in the output that is absent from the source is introduced
+# slant.
+bias:
+  term_penalty: 0.08
+  max_penalty: 0.6
+
+# Layered Decision Engine (AI Output Auditor, MB4). Parameterizes the frozen
+# non-compensatory decision flow (Evaluation Framework §6): Layer 1 grounding
+# gates, Layer 2 partial gating, Layer 3 compensatory. Held separately from the
+# legacy `decision` block below so the new pipeline never touches the legacy one.
+verdict:
+  # Compensatory quality-score bands (used only when no gate lowers the verdict).
+  excellent_band: 0.85
+  good_band: 0.65
+  # Minimum Layer-1 confidence to assert a verdict; below it, absent a definite
+  # grounding failure, the run resolves to Unable to Verify.
+  min_grounding_confidence: 0.60
+  # Per-metric weights for the compensatory (Layer-2/3) quality score. Unlisted
+  # metrics weight 1.0; inapplicable metrics are excluded entirely.
+  quality_weights:
+    Coverage: 1.0
+    Meaning Preservation: 1.0
+    Compression Quality: 0.5
+    Readability & Coherence: 0.75
+    Structure & Organization: 0.5
+    Conciseness / Non-Redundancy: 0.5
+    Bias / Objectivity: 0.75
+
 retrieval:
   fetch_timeout_seconds: 20
   max_retries: 2

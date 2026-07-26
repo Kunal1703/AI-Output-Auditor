@@ -8,6 +8,14 @@ The output is never just a number. It is a verdict with evidence, confidence, cr
 
 > **Complete.** All eight audit engines measure, the Decision Engine turns their results into a two-axis verdict, and the API serves a real, evidence-backed Final Audit Report. Text, URL, and file input all work. **Add a `GROQ_API_KEY` to run a real audit** — without one every dimension degrades and the audit returns `Unable to Verify`, which is the honest verdict for a system that could not check anything.
 
+> ### 🆕 AI Output Auditor — the new grounding pipeline (Veritas)
+>
+> A second, self-contained pipeline audits one or more **outputs** (human- or LLM-written) against a **source article** using a **local NLI cross-encoder** (zero token cost) plus a small LLM budget where a model is genuinely needed. It is layered and non-compensatory — Grounding (Faithfulness, Numeric Accuracy, Contradictions), Information Quality (Coverage, Meaning Preservation), Presentation (Readability, Conciseness, Bias) — and returns a `ComparativeReport` that ranks the outputs with a traceable verdict for every claim.
+>
+> - **Endpoint:** `POST /audit/outputs` → `ComparativeReport` (synchronous). The legacy `/audit*` endpoints are unchanged.
+> - **Frontend:** the premium **Veritas** SPA lives in [`frontend/`](frontend/README.md) — animated landing, a paste-and-compare audit workflow, interactive metric cards, findings/recommendations, and a synchronized source⇄output evidence explorer, with a cohesive light/dark theme.
+> - Built across milestones MB1–MB5; the legacy 8-engine pipeline above remains fully intact and boots alongside it.
+
 ---
 
 ## Contents

@@ -1,58 +1,95 @@
 /** @type {import('tailwindcss').Config} */
 
 /**
- * Tailwind configuration.
+ * Tailwind configuration for Veritas — the AI Output Auditor UI.
  *
- * The palette encodes Document 4 §8's UX requirements rather than decorating
- * them. Trust and Quality get visually distinct scales because the two axes
- * must never read as one blended number, and the verdict colors are semantic —
- * `untrusted` is red, `unverified` is amber, and they are deliberately
- * different hues, because "we found a problem" and "we could not check" are
- * different statements and must never look alike.
+ * Colors are semantic tokens driven by CSS variables (see `src/index.css`), as
+ * RGB triplets so Tailwind's `/<alpha-value>` opacity modifier keeps working.
+ * A single set of component classes therefore themes itself in light and dark
+ * with no `dark:` variants — the variables swap, the classes do not.
  */
+
+function withVar(variable) {
+  return `rgb(var(${variable}) / <alpha-value>)`;
+}
+
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        // Trust axis — non-compensatory. Cool, authoritative.
-        trust: {
-          50: '#eef4ff',
-          100: '#dbe6fe',
-          500: '#3b6bf5',
-          600: '#2b52d4',
-          700: '#2341a8',
-          900: '#1a2f6b',
+        // Surfaces & text (theme-driven).
+        canvas: withVar('--c-canvas'),
+        surface: withVar('--c-surface'),
+        elevated: withVar('--c-elevated'),
+        border: withVar('--c-border'),
+        hairline: withVar('--c-hairline'),
+        content: {
+          DEFAULT: withVar('--c-text'),
+          muted: withVar('--c-text-muted'),
+          subtle: withVar('--c-text-subtle'),
         },
-        // Quality axis — compensatory. Deliberately a different family from
-        // trust, so the two verdicts never read as one scale.
-        quality: {
-          50: '#f0fdf9',
-          100: '#ccfbef',
-          500: '#14b8a6',
-          600: '#0d9488',
-          700: '#0f766e',
+        // Brand accent.
+        brand: {
+          DEFAULT: withVar('--c-brand'),
+          soft: withVar('--c-brand-soft'),
+          contrast: withVar('--c-brand-contrast'),
         },
-        // Verdict semantics (Document 3, §11).
+        accent: withVar('--c-accent'),
+        // Verdict semantics (Evaluation Framework §6).
         verdict: {
-          trusted: '#16a34a',
-          caveats: '#65a30d',
-          revision: '#ea580c',
-          untrusted: '#dc2626',
-          unverified: '#d97706',
+          excellent: withVar('--c-excellent'),
+          good: withVar('--c-good'),
+          revision: withVar('--c-revision'),
+          fail: withVar('--c-fail'),
+          unverified: withVar('--c-unverified'),
         },
-        // Severity (Document 2, §3).
+        // Finding severity.
         severity: {
-          critical: '#b91c1c',
-          high: '#dc2626',
-          medium: '#ea580c',
-          low: '#ca8a04',
-          info: '#64748b',
+          critical: withVar('--c-critical'),
+          major: withVar('--c-major'),
+          minor: withVar('--c-minor'),
         },
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
-        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+      },
+      fontSize: {
+        '2xs': ['0.6875rem', { lineHeight: '1rem' }],
+      },
+      borderRadius: {
+        xl: '0.875rem',
+        '2xl': '1.125rem',
+        '3xl': '1.5rem',
+      },
+      boxShadow: {
+        soft: '0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px -4px rgb(0 0 0 / 0.10)',
+        card: '0 1px 3px rgb(0 0 0 / 0.06), 0 12px 32px -12px rgb(0 0 0 / 0.18)',
+        lift: '0 2px 6px rgb(0 0 0 / 0.08), 0 24px 48px -16px rgb(0 0 0 / 0.30)',
+        glow: '0 0 0 1px rgb(var(--c-brand) / 0.25), 0 8px 40px -8px rgb(var(--c-brand) / 0.45)',
+      },
+      backgroundImage: {
+        'grid-fade':
+          'radial-gradient(circle at 1px 1px, rgb(var(--c-hairline) / 0.7) 1px, transparent 0)',
+      },
+      keyframes: {
+        shimmer: {
+          '100%': { transform: 'translateX(100%)' },
+        },
+        'fade-up': {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        float: {
+          '0%,100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-6px)' },
+        },
+      },
+      animation: {
+        shimmer: 'shimmer 1.6s infinite',
+        'fade-up': 'fade-up 0.5s cubic-bezier(0.22,1,0.36,1) both',
+        float: 'float 6s ease-in-out infinite',
       },
     },
   },

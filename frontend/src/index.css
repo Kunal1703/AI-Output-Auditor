@@ -3,25 +3,170 @@
 @tailwind utilities;
 
 /**
- * Global styles.
+ * Veritas design system.
  *
- * The palette is dark by default: the reports are dense, evidence-heavy
- * documents that people read for a while, and the verdict and severity colors
- * carry meaning that reads more clearly against a dark surface.
+ * Two themes, one set of semantic tokens. Colors are RGB triplets so Tailwind's
+ * opacity modifier keeps working (see tailwind.config.js). The dark theme is the
+ * default — reports are dense, evidence-heavy documents, and the verdict and
+ * severity colors read more clearly against a deep surface — but the light
+ * theme is a first-class, fully-tuned counterpart.
  */
 
 @layer base {
+  :root,
+  [data-theme='dark'] {
+    --c-canvas: 9 12 18; /* #090c12 */
+    --c-surface: 15 19 28; /* #0f131c */
+    --c-elevated: 21 26 37; /* #151a25 */
+    --c-border: 34 41 56;
+    --c-hairline: 45 54 72;
+    --c-text: 226 232 240;
+    --c-text-muted: 148 163 184;
+    --c-text-subtle: 100 116 139;
+
+    --c-brand: 129 140 248; /* indigo-400 */
+    --c-brand-soft: 49 46 129;
+    --c-brand-contrast: 255 255 255;
+    --c-accent: 45 212 191; /* teal-400 */
+
+    --c-excellent: 52 211 153; /* emerald-400 */
+    --c-good: 96 165 250; /* blue-400 */
+    --c-revision: 251 146 60; /* orange-400 */
+    --c-fail: 248 113 113; /* red-400 */
+    --c-unverified: 250 204 21; /* amber-400 */
+
+    --c-critical: 248 113 113;
+    --c-major: 251 146 60;
+    --c-minor: 148 163 184;
+
+    color-scheme: dark;
+  }
+
+  [data-theme='light'] {
+    --c-canvas: 247 248 251;
+    --c-surface: 255 255 255;
+    --c-elevated: 255 255 255;
+    --c-border: 226 230 238;
+    --c-hairline: 231 235 242;
+    --c-text: 17 24 39;
+    --c-text-muted: 82 93 112;
+    --c-text-subtle: 130 142 161;
+
+    --c-brand: 79 70 229; /* indigo-600 */
+    --c-brand-soft: 224 226 255;
+    --c-brand-contrast: 255 255 255;
+    --c-accent: 13 148 136; /* teal-600 */
+
+    --c-excellent: 5 150 105;
+    --c-good: 37 99 235;
+    --c-revision: 217 119 6;
+    --c-fail: 220 38 38;
+    --c-unverified: 202 138 4;
+
+    --c-critical: 220 38 38;
+    --c-major: 217 119 6;
+    --c-minor: 100 116 139;
+
+    color-scheme: light;
+  }
+
+  * {
+    border-color: rgb(var(--c-border));
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
   }
 
   body {
-    @apply bg-slate-950 font-sans text-slate-200 antialiased;
+    @apply bg-canvas font-sans text-content antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
   }
 
-  /* Keyboard focus must stay visible. The report is a review tool, and
-     reviewers navigate long evidence lists by keyboard. */
+  /* Keyboard focus must stay visible — reviewers navigate evidence by keyboard. */
   :focus-visible {
-    @apply outline-none ring-2 ring-trust-500 ring-offset-2 ring-offset-slate-950;
+    @apply outline-none ring-2 ring-brand ring-offset-2;
+    --tw-ring-offset-color: rgb(var(--c-canvas));
+  }
+
+  ::selection {
+    background: rgb(var(--c-brand) / 0.28);
+  }
+
+  /* Refined scrollbars. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--c-hairline));
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--c-text-subtle));
+    background-clip: padding-box;
+  }
+}
+
+@layer components {
+  /* Frosted glass surface used for the sidebar, topbar, and hero cards. */
+  .glass {
+    background: rgb(var(--c-surface) / 0.72);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+  }
+
+  /* Shimmer skeleton. */
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-elevated;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full animate-shimmer;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(var(--c-hairline) / 0.55),
+      transparent
+    );
+  }
+
+  /* Soft brand gradient text for hero headlines. */
+  .text-gradient {
+    background: linear-gradient(
+      100deg,
+      rgb(var(--c-text)),
+      rgb(var(--c-brand)) 60%,
+      rgb(var(--c-accent))
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Respect reduced-motion: disable non-essential animation. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

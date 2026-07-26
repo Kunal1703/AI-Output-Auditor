@@ -15,13 +15,19 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.shared.schemas import JobStatus
+from app.shared.schemas import (
+    AuditOptions as DomainAuditOptions,
+    JobStatus,
+    OutputInput,
+    SourceInput,
+)
 
 __all__ = [
     "AuditOptions",
     "AuditTextRequest",
     "AuditUrlRequest",
     "AuditRequest",
+    "AuditOutputsRequest",
     "AuditCreatedResponse",
     "AuditStatusResponse",
     "HealthResponse",
@@ -125,6 +131,26 @@ class AuditRequest(BaseModel):
                 else "Provide 'text' or 'url', not both."
             )
         return self
+
+
+class AuditOutputsRequest(BaseModel):
+    """``POST /audit/outputs`` — the AI Output Auditor entry point (MB4).
+
+    Audits one or more outputs against a mandatory source article and returns a
+    ``ComparativeReport``. Distinct from the legacy ``/audit`` endpoints, which
+    remain unchanged for backward compatibility.
+
+    Reuses the domain input contracts (``SourceInput``/``OutputInput``) frozen in
+    MB1 rather than redefining them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: SourceInput = Field(description="The mandatory ground-truth source article.")
+    outputs: list[OutputInput] = Field(
+        min_length=1, description="One or more outputs to audit against the source."
+    )
+    options: DomainAuditOptions = Field(default_factory=DomainAuditOptions)
 
 
 class AuditCreatedResponse(BaseModel):

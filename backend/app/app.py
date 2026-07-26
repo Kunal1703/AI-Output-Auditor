@@ -48,6 +48,13 @@ from app.shared.nli_service import LocalNLIService, NLIService
 from app.attribution.attribution import AttributionService
 from app.evaluators.faithfulness import FaithfulnessEvaluator
 from app.evaluators.numeric_accuracy import NumericAccuracyEvaluator
+from app.evaluators.coverage import CoverageEvaluator
+from app.evaluators.meaning_preservation import MeaningPreservationEvaluator
+from app.evaluators.readability import ReadabilityEvaluator
+from app.evaluators.conciseness import ConcisenessEvaluator
+from app.evaluators.bias import BiasEvaluator
+from app.orchestration.audit_orchestrator import AuditOrchestrator
+from app.orchestration.decision import GroundingDecisionEngine
 from app.shared.evidence_store import InMemoryEvidenceStore
 from app.shared.classification.claims import ClaimCentralityAssigner, ClaimClassifier
 from app.shared.classification.key_points import (
@@ -200,6 +207,34 @@ class ServiceContainer:
         )
         self.faithfulness = FaithfulnessEvaluator(settings)
         self.numeric_accuracy = NumericAccuracyEvaluator(settings)
+        # MB3 remaining metrics — all consume the MB2 grounding spine and reuse
+        # existing shared services (key-point extraction, salience, embeddings,
+        # deterministic validators). Still isolated from the legacy pipeline.
+        self.coverage = CoverageEvaluator(
+            settings, self.key_point_extraction, self.salience_assigner
+        )
+        self.meaning_preservation = MeaningPreservationEvaluator(settings)
+        self.readability = ReadabilityEvaluator(settings, self.validators)
+        self.conciseness = ConcisenessEvaluator(settings, self.embeddings)
+        self.bias = BiasEvaluator(settings)
+
+        # MB4 — the layered Decision Engine and the Audit Orchestrator, the only
+        # component that owns evaluator execution order. Both are isolated from
+        # the legacy orchestrator/decision engine, which remain wired above.
+        self.grounding_decision = GroundingDecisionEngine(settings)
+        self.audit_orchestrator = AuditOrchestrator(
+            settings,
+            self.attribution,
+            self.faithfulness,
+            self.numeric_accuracy,
+            self.coverage,
+            self.meaning_preservation,
+            self.readability,
+            self.conciseness,
+            self.bias,
+            self.grounding_decision,
+            self.confidence,
+        )
 
         self._extractor = DefaultContentExtractor(settings)
         self.input_router: InputRouter = DefaultInputRouter(self._extractor)

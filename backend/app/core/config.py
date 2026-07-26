@@ -52,6 +52,10 @@ __all__ = [
     "InputSettings",
     "AttributionSettings",
     "NumericAccuracySettings",
+    "CoverageEvaluatorSettings",
+    "MeaningPreservationSettings",
+    "BiasSettings",
+    "VerdictSettings",
     "RetrievalSettings",
     "PromptSettings",
     "OrchestratorSettings",
@@ -333,6 +337,141 @@ class NumericAccuracySettings(BaseModel):
         description="Relative difference at or above which a context-aligned "
         "numeric mismatch is escalated from MAJOR to CRITICAL severity.",
     )
+
+
+class CoverageEvaluatorSettings(BaseModel):
+    """Settings for the MB3 Coverage evaluator (AI Output Auditor).
+
+    Coverage is derived from the MB2 attribution map — no new retrieval or NLI.
+    These are its own tunables, held separately from the legacy ``engines.coverage``
+    so the new pipeline never reaches into the legacy one.
+    """
+
+    critical_omission_salience: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description="Salience floor at which a missing key point becomes a "
+        "Missing-Critical-Fact finding. Below it, an omission is a score effect, "
+        "not a critical fact — which is what keeps Coverage from over-penalizing "
+        "summarization.",
+    )
+    partial_credit: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Score credit a partially-covered key point earns.",
+    )
+    critical_severity_salience: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Salience at or above which a missing critical fact is rated "
+        "CRITICAL rather than MAJOR.",
+    )
+
+
+class MeaningPreservationSettings(BaseModel):
+    """Settings for the MB3 Meaning Preservation evaluator.
+
+    Meaning Preservation is holistic; here it is derived from the MB2/MB3 signals
+    (attribution contradictions and salient coverage loss) rather than a separate
+    LLM judge, which keeps it lightweight and model-free.
+    """
+
+    contradiction_penalty: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description="Score penalty per source-contradicting output claim. A "
+        "reversal distorts the source's meaning, so it is penalized heavily.",
+    )
+    context_loss_penalty: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description="Score penalty per dropped high-salience key point (lost "
+        "essential context), on top of the coverage-driven base.",
+    )
+
+
+class BiasSettings(BaseModel):
+    """Settings for the MB3 Bias / Objectivity evaluator.
+
+    Bias is measured *relative to the source*: loaded or subjective language in
+    the output that is not present in the source counts as introduced slant.
+    """
+
+    term_penalty: float = Field(
+        default=0.08,
+        ge=0.0,
+        le=1.0,
+        description="Score penalty per introduced loaded/subjective term.",
+    )
+    max_penalty: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Cap on the total loaded-language penalty, so a long "
+        "opinion piece cannot drive objectivity below a floor on lexical "
+        "matches alone.",
+    )
+
+
+class VerdictSettings(BaseModel):
+    """Thresholds and weights for the MB4 layered Decision Engine.
+
+    These parameterize the frozen non-compensatory decision flow (Evaluation
+    Framework §6): the gate logic and layer roles are fixed in code, while where
+    the bands sit and how the compensatory layers are weighted are configuration.
+    Held separately from the legacy ``decision`` block so the new pipeline never
+    reaches into the legacy Decision Engine.
+    """
+
+    excellent_band: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Compensatory quality score at/above which the verdict is "
+        "Excellent (when no gate lowers it).",
+    )
+    good_band: float = Field(
+        default=0.65,
+        ge=0.0,
+        le=1.0,
+        description="Compensatory quality score at/above which the verdict is "
+        "Good; below it, Needs Revision.",
+    )
+    min_grounding_confidence: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description="Minimum grounding (Layer-1) confidence required to assert a "
+        "verdict. Below it — and absent a definite grounding failure — the run "
+        "resolves to Unable to Verify rather than a pass.",
+    )
+    quality_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "Coverage": 1.0,
+            "Meaning Preservation": 1.0,
+            "Compression Quality": 0.5,
+            "Readability & Coherence": 0.75,
+            "Structure & Organization": 0.5,
+            "Conciseness / Non-Redundancy": 0.5,
+            "Bias / Objectivity": 0.75,
+        },
+        description="Per-metric weights for the compensatory (Layer-2/3) quality "
+        "score. Unlisted metrics default to weight 1.0; inapplicable metrics are "
+        "excluded from numerator and denominator entirely.",
+    )
+
+    @model_validator(mode="after")
+    def _bands_ordered(self) -> "VerdictSettings":
+        if not 0.0 <= self.good_band < self.excellent_band <= 1.0:
+            raise ValueError(
+                "verdict bands must satisfy 0 <= good_band < excellent_band <= 1"
+            )
+        return self
 
 
 class RetrievalSettings(BaseModel):
@@ -846,6 +985,14 @@ class Settings(BaseSettings):
     input: InputSettings = Field(default_factory=InputSettings)
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     numeric: NumericAccuracySettings = Field(default_factory=NumericAccuracySettings)
+    coverage: CoverageEvaluatorSettings = Field(
+        default_factory=CoverageEvaluatorSettings
+    )
+    meaning: MeaningPreservationSettings = Field(
+        default_factory=MeaningPreservationSettings
+    )
+    bias: BiasSettings = Field(default_factory=BiasSettings)
+    verdict: VerdictSettings = Field(default_factory=VerdictSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     prompts: PromptSettings = Field(default_factory=PromptSettings)
     orchestrator: OrchestratorSettings = Field(default_factory=OrchestratorSettings)
@@ -978,6 +1125,10 @@ def load_settings(settings_file: Path | None = None) -> Settings:
         "input",
         "attribution",
         "numeric",
+        "coverage",
+        "meaning",
+        "bias",
+        "verdict",
         "retrieval",
         "prompts",
         "orchestrator",

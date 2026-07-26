@@ -28,7 +28,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import routes_audit, routes_health, routes_report
+from app.api import (
+    routes_audit,
+    routes_health,
+    routes_output_audit,
+    routes_report,
+)
 from app.api.jobs import JobStore
 from app.app import build_container
 from app.core.config import Settings
@@ -169,5 +174,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(routes_health.router)
     app.include_router(routes_audit.router)
+    app.include_router(routes_output_audit.router)
     app.include_router(routes_report.router)
     return app
