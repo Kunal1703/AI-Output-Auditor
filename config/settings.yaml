@@ -116,6 +116,29 @@ nli:
 input:
   max_outputs: 10
 
+# Attribution substrate (AI Output Auditor, MB2). Per output claim: retrieve
+# top-k candidate source spans, run local NLI over each (source-span, claim)
+# pair, aggregate SummaC-style. top_k too low -> false "Not Found"; the
+# contradiction floor governs when a claim is called a contradiction (which
+# gates the verdict), so it is deliberately not tiny. The entailment floor for
+# "supported" is shared with nli.entail_threshold above.
+attribution:
+  top_k: 5
+  contradiction_threshold: 0.5
+  max_claims: 80
+
+# Factual & Numeric Accuracy (AI Output Auditor, MB2) — fully deterministic.
+# Figures/dates/percentages/quantities are extracted from source and output; an
+# output value that conflicts with a context-aligned source value is a Numeric
+# Error. No model in the loop.
+numeric:
+  # Relative difference below which values are equal (defensible rounding).
+  rounding_tolerance: 0.005
+  # Minimum sentence token overlap for two values to be "about the same fact".
+  context_overlap_min: 0.18
+  # Relative difference at/above which a mismatch escalates MAJOR -> CRITICAL.
+  major_relative_difference: 0.10
+
 retrieval:
   fetch_timeout_seconds: 20
   max_retries: 2

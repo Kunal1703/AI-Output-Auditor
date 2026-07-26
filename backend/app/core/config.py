@@ -50,6 +50,8 @@ __all__ = [
     "EmbeddingSettings",
     "NLISettings",
     "InputSettings",
+    "AttributionSettings",
+    "NumericAccuracySettings",
     "RetrievalSettings",
     "PromptSettings",
     "OrchestratorSettings",
@@ -261,6 +263,75 @@ class InputSettings(BaseModel):
         gt=0,
         description="Maximum number of outputs audited against the source in a "
         "single request.",
+    )
+
+
+class AttributionSettings(BaseModel):
+    """Settings for the Attribution substrate (AI Output Auditor, MB2).
+
+    Attribution retrieves candidate source spans per output claim and runs the
+    local NLI model over each ``(source-span, claim)`` pair, aggregating
+    SummaC-style (max entailment / max contradiction over the candidates). Two
+    dials govern precision/recall downstream: ``top_k`` (too low → false
+    Not-Found) and the entailment/contradiction thresholds. The entailment floor
+    is shared with ``nli.entail_threshold``; the contradiction floor lives here.
+    """
+
+    top_k: int = Field(
+        default=5,
+        gt=0,
+        description="Candidate source spans retrieved per output claim before "
+        "NLI. Generous on purpose: a missed span becomes a false 'Not Found'.",
+    )
+    contradiction_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="NLI contradiction-probability floor for labelling a claim "
+        "CONTRADICTED (an intrinsic hallucination). Precision matters here — a "
+        "material contradiction gates the verdict — so the floor is not tiny.",
+    )
+    max_claims: int = Field(
+        default=80,
+        gt=0,
+        description="Ceiling on output claims run through attribution per output, "
+        "so a pathologically long output cannot blow the NLI budget. Excess "
+        "claims are reported in diagnostics.",
+    )
+
+
+class NumericAccuracySettings(BaseModel):
+    """Settings for the deterministic Factual & Numeric Accuracy evaluator (MB2).
+
+    Numeric accuracy is checked deterministically: figures/dates/percentages/
+    quantities are extracted from source and output, then an output value that
+    conflicts with a context-aligned source value is a Numeric Error. No model
+    is in the loop — a wrong number must never depend on an LLM's arithmetic.
+    """
+
+    rounding_tolerance: float = Field(
+        default=0.005,
+        ge=0.0,
+        le=1.0,
+        description="Relative difference below which two values are treated as "
+        "equal (defensible rounding, e.g. 5.19 vs 5.2). At or below this a "
+        "mismatch is not reported; above it, it is a Numeric Error.",
+    )
+    context_overlap_min: float = Field(
+        default=0.18,
+        ge=0.0,
+        le=1.0,
+        description="Minimum Jaccard token overlap between an output value's "
+        "sentence and a source value's sentence for the two to be considered "
+        "'about the same fact' and thus comparable. Below it, a differing value "
+        "is a different fact, not a contradiction — which keeps the check from "
+        "flagging unrelated numbers.",
+    )
+    major_relative_difference: float = Field(
+        default=0.10,
+        ge=0.0,
+        description="Relative difference at or above which a context-aligned "
+        "numeric mismatch is escalated from MAJOR to CRITICAL severity.",
     )
 
 
@@ -773,6 +844,8 @@ class Settings(BaseSettings):
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     nli: NLISettings = Field(default_factory=NLISettings)
     input: InputSettings = Field(default_factory=InputSettings)
+    attribution: AttributionSettings = Field(default_factory=AttributionSettings)
+    numeric: NumericAccuracySettings = Field(default_factory=NumericAccuracySettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     prompts: PromptSettings = Field(default_factory=PromptSettings)
     orchestrator: OrchestratorSettings = Field(default_factory=OrchestratorSettings)
@@ -903,6 +976,8 @@ def load_settings(settings_file: Path | None = None) -> Settings:
         "embedding",
         "nli",
         "input",
+        "attribution",
+        "numeric",
         "retrieval",
         "prompts",
         "orchestrator",

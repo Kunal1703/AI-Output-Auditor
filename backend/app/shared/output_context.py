@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from app.core.logging import bind, get_logger
 from app.shared.document_analysis import (
@@ -33,9 +33,15 @@ from app.shared.document_analysis import (
     analyze_metadata,
     analyze_statistics,
 )
+from app.shared.extraction.models import Claim
+from app.shared.numeric_ledger import NumericMention, extract_numeric_mentions
 from app.shared.schemas import OutputType, Producer
 from app.shared.source_context import SourceContext
 from app.shared.text_segmentation import TextSegmenter, TextSpan
+
+if TYPE_CHECKING:  # imported for typing only — avoids importing heavy services
+    from app.shared.embedding_service import EmbeddingService
+    from app.shared.extraction.claims import ClaimExtractionService
 
 __all__ = ["OutputContext", "OutputKeys"]
 
@@ -163,6 +169,62 @@ class OutputContext:
         if source_words <= 0:
             return None
         return self.statistics.word_count / source_words
+
+    @property
+    def numeric_mentions(self) -> tuple[NumericMention, ...]:
+        """The output numeric ledger — figures/dates/percentages/quantities.
+
+        Deterministic and model-free; a synchronous lazy derivation. The Numeric
+        Accuracy evaluator compares each of these against the source ledger.
+        """
+        return self._memo(
+            "numeric_mentions",
+            lambda: extract_numeric_mentions(self.text, self.sentences),
+        )
+
+    # -- Expensive async derivations (MB2) ---------------------------------- #
+
+    async def claims(
+        self, extraction: "ClaimExtractionService"
+    ) -> tuple[Claim, ...]:
+        """Decompose the output into atomic, independently checkable claims.
+
+        The unit Attribution and Faithfulness operate on. Reuses the existing
+        ``ClaimExtractionService`` (§7.2 stage 2) unchanged; the returned claims
+        carry ``claim_type``/``centrality`` as ``None`` (classification is a
+        later stage the auditor does not run in MB2).
+
+        Args:
+            extraction: The shared claim extraction service.
+
+        Returns:
+            The output's claims, in output order.
+        """
+
+        async def compute() -> tuple[Claim, ...]:
+            result = await extraction.extract(self.text)
+            return tuple(result.units)
+
+        return await self.get_or_compute(OutputKeys.OUTPUT_CLAIMS, compute)
+
+    async def claim_embeddings(
+        self, embeddings: "EmbeddingService", claims: tuple[Claim, ...]
+    ) -> list[list[float]]:
+        """Embed the output claims once, warming the shared cache.
+
+        Args:
+            embeddings: The shared embedding service.
+            claims: The claims to embed (from :meth:`claims`).
+
+        Returns:
+            One vector per claim, in claim order.
+        """
+
+        async def compute() -> list[list[float]]:
+            texts = [claim.text for claim in claims]
+            return await embeddings.embed(texts) if texts else []
+
+        return await self.get_or_compute(OutputKeys.OUTPUT_EMBEDDINGS, compute)
 
     # -- Shared async derivation store -------------------------------------- #
 

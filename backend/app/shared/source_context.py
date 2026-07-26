@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from app.core.logging import bind, get_logger
 from app.shared.document_analysis import (
@@ -40,8 +40,15 @@ from app.shared.document_analysis import (
     analyze_metadata,
     analyze_statistics,
 )
+from app.shared.extraction.models import KeyPoint
+from app.shared.numeric_ledger import NumericMention, extract_numeric_mentions
 from app.shared.schemas import SourceMeta
 from app.shared.text_segmentation import TextSegmenter, TextSpan
+
+if TYPE_CHECKING:  # imported for typing only — avoids importing heavy services
+    from app.shared.classification.key_points import SalienceAssigner
+    from app.shared.embedding_service import EmbeddingService
+    from app.shared.extraction.key_points import KeyPointExtractionService
 
 __all__ = ["SourceContext", "SourceKeys"]
 
@@ -142,6 +149,72 @@ class SourceContext:
             "metadata",
             lambda: analyze_metadata(self.text, self.extraction_metadata),
         )
+
+    @property
+    def numeric_mentions(self) -> tuple[NumericMention, ...]:
+        """The source numeric ledger — figures/dates/percentages/quantities.
+
+        Deterministic and model-free (see :mod:`app.shared.numeric_ledger`), so
+        it is a synchronous lazy derivation. The Numeric Accuracy evaluator
+        compares each output value against these.
+        """
+        return self._memo(
+            "numeric_mentions",
+            lambda: extract_numeric_mentions(self.text, self.sentences),
+        )
+
+    # -- Expensive async derivations (MB2) ---------------------------------- #
+
+    async def key_points(
+        self,
+        extraction: "KeyPointExtractionService",
+        salience: "SalienceAssigner",
+    ) -> tuple[KeyPoint, ...]:
+        """Extract the source's key points and assign each a salience.
+
+        Computed once per audit and shared across every output's Coverage check
+        (MB3). Reuses the existing ``KeyPointExtractionService`` (§7.3 stage 2)
+        and ``SalienceAssigner`` (stage 3) unchanged — extraction reads the
+        source, salience weights each point relative to the source.
+
+        Args:
+            extraction: The shared key-point extraction service.
+            salience: The shared salience assigner.
+
+        Returns:
+            Key points with salience assigned, in source order.
+        """
+
+        async def compute() -> tuple[KeyPoint, ...]:
+            result = await extraction.extract(self.text)
+            if not result.units:
+                return ()
+            weighted = await salience.classify(result.units)
+            return tuple(weighted)
+
+        return await self.get_or_compute(SourceKeys.KEY_POINTS, compute)
+
+    async def sentence_embeddings(
+        self, embeddings: "EmbeddingService"
+    ) -> list[list[float]]:
+        """Embed the source sentences once, warming the shared cache.
+
+        Attribution retrieves candidate source spans by similarity; embedding the
+        source sentences here means the first output's retrieval pays for the
+        encode and every later output is served from the shared embedding cache.
+
+        Args:
+            embeddings: The shared embedding service.
+
+        Returns:
+            One vector per source sentence, in sentence order.
+        """
+
+        async def compute() -> list[list[float]]:
+            texts = [span.text for span in self.sentences]
+            return await embeddings.embed(texts) if texts else []
+
+        return await self.get_or_compute(SourceKeys.SOURCE_EMBEDDINGS, compute)
 
     def source_meta(self) -> SourceMeta:
         """Project the report-header facts about the source (§6).

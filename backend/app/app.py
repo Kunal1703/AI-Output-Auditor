@@ -45,6 +45,9 @@ from app.shared.deterministic_validators import DefaultDeterministicValidators
 from app.shared.document_analysis import warm_language_detection
 from app.shared.embedding_service import LocalEmbeddingService, build_embedding_cache
 from app.shared.nli_service import LocalNLIService, NLIService
+from app.attribution.attribution import AttributionService
+from app.evaluators.faithfulness import FaithfulnessEvaluator
+from app.evaluators.numeric_accuracy import NumericAccuracyEvaluator
 from app.shared.evidence_store import InMemoryEvidenceStore
 from app.shared.classification.claims import ClaimCentralityAssigner, ClaimClassifier
 from app.shared.classification.key_points import (
@@ -181,6 +184,22 @@ class ServiceContainer:
 
         self.task_identification = TaskIdentificationStage(self.llm, self.prompts)
         self.claim_citation_mapper = ClaimCitationMapper(self.llm, self.prompts)
+
+        # AI Output Auditor grounding spine (MB2). App-scoped, stateless, and
+        # isolated from the legacy engine pipeline above: the Attribution
+        # substrate and the two Layer-1 evaluators reuse the shared retrieval,
+        # NLI, embedding, and claim-extraction services. Nothing here is wired
+        # into the legacy orchestrator/registry/Decision Engine — the new
+        # pipeline is assembled in MB4.
+        self.attribution = AttributionService(
+            settings,
+            self.retrieval,
+            self.nli,
+            self.embeddings,
+            self.claim_extraction,
+        )
+        self.faithfulness = FaithfulnessEvaluator(settings)
+        self.numeric_accuracy = NumericAccuracyEvaluator(settings)
 
         self._extractor = DefaultContentExtractor(settings)
         self.input_router: InputRouter = DefaultInputRouter(self._extractor)
