@@ -44,6 +44,7 @@ from app.shared.confidence_service import DefaultConfidenceService
 from app.shared.deterministic_validators import DefaultDeterministicValidators
 from app.shared.document_analysis import warm_language_detection
 from app.shared.embedding_service import LocalEmbeddingService, build_embedding_cache
+from app.shared.nli_service import LocalNLIService, NLIService
 from app.shared.evidence_store import InMemoryEvidenceStore
 from app.shared.classification.claims import ClaimCentralityAssigner, ClaimClassifier
 from app.shared.classification.key_points import (
@@ -128,6 +129,13 @@ class ServiceContainer:
         # every engine and every run is the entire point (Document 4, §12).
         self.embedding_cache = build_embedding_cache(settings)
         self.embeddings = LocalEmbeddingService(settings, cache=self.embedding_cache)
+
+        # Local NLI cross-encoder — the backbone of the new evaluation
+        # pipeline's Layer 1 and Attribution (AI Output Auditor, MB1). Same
+        # dependency class as embeddings; loaded lazily (or warmed at startup),
+        # so constructing it here never pulls in torch. No metric consumes it
+        # until MB2.
+        self.nli: NLIService = LocalNLIService(settings)
 
         self.retrieval = DefaultRetrievalService(settings, self.embeddings)
         self.prompts = FilePromptManager(settings)
@@ -375,13 +383,37 @@ class ServiceContainer:
             extra=bind(provider=self.settings.llm.provider, model=configured),
         )
 
+    async def warm_nli(self) -> bool:
+        """Load the NLI model at startup when configured to (AI Output Auditor).
+
+        Called from the app lifespan. Gated on ``nli.warm_on_startup`` so a
+        deployment can defer the ~180MB load to first use. Non-fatal: a failed
+        load (offline, no cached model) leaves ``nli_ready`` False and the app
+        still boots, matching the graceful-degradation policy used elsewhere.
+
+        Returns:
+            True if the NLI model is ready after the call, else False.
+        """
+        if not self.settings.nli.warm_on_startup:
+            logger.info(
+                "NLI warm-up skipped (nli.warm_on_startup is false)",
+                extra=bind(nli_model=self.settings.nli.model),
+            )
+            return self.nli.is_ready
+        ready = await self.nli.warm()
+        logger.info(
+            "NLI warm-up complete",
+            extra=bind(nli_model=self.settings.nli.model, nli_ready=ready),
+        )
+        return ready
+
     async def health(self) -> dict[str, object]:
         """Collect readiness facts for ``GET /health`` (Document 4, §7).
 
         Returns:
             Provider identity, configuration state, provider reachability,
-            whether the configured model is actually served, and embedding-cache
-            effectiveness.
+            whether the configured model is actually served, embedding-cache
+            effectiveness, and NLI-service readiness (AI Output Auditor, MB1).
         """
         cache = self.embeddings.cache_stats
         models = await self.llm.available_models()
@@ -400,12 +432,15 @@ class ServiceContainer:
             "embedding_cache_enabled": self.settings.embedding.cache_enabled,
             "embedding_cache_hit_rate": round(cache.hit_rate, 4),
             "prompt_templates": len(self.prompts.available()),
+            "nli_model": self.nli.model_name,
+            "nli_ready": self.nli.is_ready,
         }
 
     async def aclose(self) -> None:
         """Release application-scoped resources on shutdown."""
         await self.llm.aclose()
         await self.embeddings.aclose()
+        await self.nli.aclose()
         await self.retrieval.aclose()
         await self._extractor.aclose()
         self.embedding_cache.clear()

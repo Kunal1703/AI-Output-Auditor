@@ -88,6 +88,34 @@ embedding:
   cache_enabled: true
   cache_max_entries: 20000
 
+# Local NLI cross-encoder (AI Output Auditor, MB1). The backbone of the new
+# evaluation pipeline's Layer 1 and Attribution: it labels a (premise,
+# hypothesis) pair entailed / neutral / contradicted on CPU at zero token cost.
+# Same dependency class as the embedding model (sentence-transformers / torch,
+# already installed) — no new package. Loaded lazily; the first load downloads
+# ~180MB into the local Hugging Face cache. Consumed by metrics in MB2+.
+nli:
+  provider: "local"
+  model: "cross-encoder/nli-deberta-v3-base"
+
+  # Softmax-probability floor the entailment class must clear before the service
+  # returns SUPPORTED; below it a top-entailment pair is reported NEUTRAL. This
+  # is the precision/recall dial for "supported" — a printed number, calibrated
+  # against real pairs in a later milestone, not guessed here.
+  entail_threshold: 0.5
+  batch_size: 32
+
+  # Load the model at startup so /health reports nli_ready immediately. Non-fatal
+  # on failure (offline with no cached model): the app still boots and reports
+  # nli_ready: false, matching the graceful-degradation policy used elsewhere.
+  warm_on_startup: true
+
+# Bounds for the new {source, outputs[]} audit input contract (MB1). One
+# mandatory source article is audited against one or more outputs; this caps the
+# fan-out per request.
+input:
+  max_outputs: 10
+
 retrieval:
   fetch_timeout_seconds: 20
   max_retries: 2

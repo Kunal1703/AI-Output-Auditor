@@ -53,4 +53,6 @@ async def health(container: ServiceContainer = Depends(get_container)) -> Health
         embedding_cache_enabled=bool(facts["embedding_cache_enabled"]),
         embedding_cache_hit_rate=float(facts["embedding_cache_hit_rate"]),  # type: ignore[arg-type]
         prompt_templates=int(facts["prompt_templates"]),  # type: ignore[arg-type]
+        nli_model=str(facts["nli_model"]),
+        nli_ready=bool(facts["nli_ready"]),
     )

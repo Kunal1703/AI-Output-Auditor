@@ -48,6 +48,8 @@ from app.shared.schemas import Severity
 __all__ = [
     "LLMSettings",
     "EmbeddingSettings",
+    "NLISettings",
+    "InputSettings",
     "RetrievalSettings",
     "PromptSettings",
     "OrchestratorSettings",
@@ -196,6 +198,70 @@ class EmbeddingSettings(BaseModel):
         "without limit.",
     )
     api_key: SecretStr | None = Field(default=None, exclude=True)
+
+
+class NLISettings(BaseModel):
+    """Settings for the Shared NLI Service (AI Output Auditor, MB1).
+
+    The local NLI cross-encoder is the backbone of Layer 1 and Attribution in
+    the new evaluation pipeline: it produces an entailment label —
+    ``entailed / neutral / contradicted`` — for a (premise, hypothesis) pair on
+    CPU, at zero token cost. It is the same class of dependency as the embedding
+    model (``sentence-transformers`` / ``torch``, already shipped), so no new
+    package is required.
+
+    Consumed in MB2+ by Attribution and the Layer-1 metrics. In MB1 the service
+    exists, loads, and is reported on ``/health``; no metric runs against it yet.
+    """
+
+    provider: str = Field(default="local")
+    model: str = Field(
+        default="cross-encoder/nli-deberta-v3-base",
+        description="A SentenceTransformers ``CrossEncoder`` NLI model with a "
+        "3-class (entailment / neutral / contradiction) head. Loaded lazily; the "
+        "first load downloads ~180MB into the local HF cache.",
+    )
+    entail_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Softmax-probability floor the entailment class must clear "
+        "for the service to return SUPPORTED. Below it, a top-entailment pair is "
+        "reported NEUTRAL. This is the precision/recall dial for 'supported' the "
+        "research calls out — a printed number, not a guess (calibrated in a "
+        "later milestone).",
+    )
+    batch_size: int = Field(
+        default=32,
+        gt=0,
+        description="Pairs scored per model call. Batching matters because "
+        "Attribution scores a claim against several candidate source spans at "
+        "once (MB2).",
+    )
+    warm_on_startup: bool = Field(
+        default=True,
+        description="Load the model during startup so ``/health`` reports "
+        "``nli_ready: true`` immediately. Non-fatal: if the load fails (e.g. "
+        "offline with no cached model) the app still boots and ``nli_ready`` is "
+        "False, mirroring the graceful-degradation policy used elsewhere.",
+    )
+    api_key: SecretStr | None = Field(default=None, exclude=True)
+
+
+class InputSettings(BaseModel):
+    """Bounds for the new ``{source, outputs[]}`` audit input contract (MB1).
+
+    The AI Output Auditor audits one mandatory source article against one or
+    more outputs. This caps how many outputs a single request may carry so a
+    pathological request cannot fan out without limit.
+    """
+
+    max_outputs: int = Field(
+        default=10,
+        gt=0,
+        description="Maximum number of outputs audited against the source in a "
+        "single request.",
+    )
 
 
 class RetrievalSettings(BaseModel):
@@ -705,6 +771,8 @@ class Settings(BaseSettings):
 
     llm: LLMSettings = Field(default_factory=LLMSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    nli: NLISettings = Field(default_factory=NLISettings)
+    input: InputSettings = Field(default_factory=InputSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     prompts: PromptSettings = Field(default_factory=PromptSettings)
     orchestrator: OrchestratorSettings = Field(default_factory=OrchestratorSettings)
@@ -833,6 +901,8 @@ def load_settings(settings_file: Path | None = None) -> Settings:
     for section in (
         "llm",
         "embedding",
+        "nli",
+        "input",
         "retrieval",
         "prompts",
         "orchestrator",

@@ -74,6 +74,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # a startup misconfiguration, not a content verdict. Skips itself when
     # availability cannot be checked (offline), so it never blocks on a blip.
     await container.verify_model()
+    # Load the local NLI model ahead of first use so /health reports nli_ready
+    # (AI Output Auditor, MB1). Non-fatal: a failed load leaves the app bootable
+    # with nli_ready=false, and no metric consumes NLI until MB2.
+    await container.warm_nli()
     app.state.container = container
     app.state.jobs = JobStore(retention_seconds=container.settings.jobs.retention_seconds)
     logger.info(

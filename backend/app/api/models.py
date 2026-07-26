@@ -189,6 +189,17 @@ class HealthResponse(BaseModel):
         description="Prompt templates discovered under config/prompts/. Zero "
         "means every LLM-backed stage will degrade.",
     )
+    nli_model: str | None = Field(
+        default=None,
+        description="The configured local NLI model id (AI Output Auditor). The "
+        "backbone of the new pipeline's Layer 1 and Attribution.",
+    )
+    nli_ready: bool | None = Field(
+        default=None,
+        description="Whether the local NLI model is loaded and ready to score. "
+        "False means it has not been warmed or its load failed (e.g. offline "
+        "with no cached model); the app still serves.",
+    )
 
 
 class ErrorBody(BaseModel):
