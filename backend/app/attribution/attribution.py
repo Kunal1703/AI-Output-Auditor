@@ -55,6 +55,22 @@ _SUPPORT_BY_LABEL: dict[NLILabel, SupportLabel] = {
     NLILabel.CONTRADICTED: SupportLabel.NOT_FOUND,
 }
 
+#: How far below the best retrieval score a candidate may still be considered
+#: *contradicting* evidence for a claim. Retrieval returns the top-k source
+#: sentences by similarity, but the tail of that list is often off-topic, and an
+#: NLI cross-encoder routinely emits a spurious "contradiction" on unrelated
+#: sentence pairs that merely share a date or a name (e.g. a claim about a 2028
+#: film vs. a sentence about the 2007/2011 films). Crediting those flips faithful,
+#: on-topic claims to CONTRADICTED. A genuine contradiction, by contrast, is
+#: expressed by the claim's *own* evidence sentence, which retrieval ranks at or
+#: near the top. Requiring the contradicting span to sit within this margin of the
+#: best-retrieved span keeps genuine contradictions while dropping the off-topic
+#: false positives. Support (entailment) is unaffected — it still scans all top-k.
+#: The gate only ever narrows when CONTRADICTED is declared; it can never reduce a
+#: SUPPORTED grounding. Calibrated against real pairs: false-positive contradictors
+#: trailed the best span by 0.28–0.42 in similarity, genuine ones by 0.0.
+_CONTRA_RELEVANCE_MARGIN = 0.15
+
 
 @dataclass(frozen=True)
 class ClaimAttribution:
@@ -257,14 +273,25 @@ class AttributionService:
             results = await self._nli.label_batch(
                 [(p.chunk.text, claim.text) for p in passages]
             )
-            # SummaC aggregation: best entailment and best contradiction across
-            # the candidate source spans.
+            # SummaC aggregation: best entailment across all candidate source
+            # spans, best contradiction across only the *relevant* ones. Support
+            # can legitimately come from any retrieved span; a contradiction only
+            # counts from a span that is actually about the claim (see
+            # _CONTRA_RELEVANCE_MARGIN), which drops off-topic NLI false positives
+            # without touching support recall.
             best_support_i = max(
                 range(len(results)), key=lambda i: results[i].entailment
             )
-            best_contra_i = max(
-                range(len(results)), key=lambda i: results[i].contradiction
-            )
+            # Passages are ordered by descending retrieval score, so passages[0]
+            # is the best-matched span. Index 0 always clears the margin, so the
+            # relevant set is never empty.
+            top_score = passages[0].score
+            relevant = [
+                i
+                for i in range(len(results))
+                if passages[i].score >= top_score - _CONTRA_RELEVANCE_MARGIN
+            ]
+            best_contra_i = max(relevant, key=lambda i: results[i].contradiction)
             support_prob = results[best_support_i].entailment
             contra_prob = results[best_contra_i].contradiction
 

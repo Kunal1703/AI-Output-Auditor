@@ -3,11 +3,9 @@
 ``POST /audit/outputs`` — audit one or more outputs against a mandatory source
 article and return the finalized :class:`ComparativeReport`.
 
-This is the new evaluation pipeline's entry point. It is **additive**: the legacy
-``/audit``, ``/audit/text``, ``/audit/url``, ``/audit/file`` endpoints are
-untouched and keep returning the legacy ``AuditReport``. This layer contains no
-audit or decision logic — it normalizes the request, hands the contexts to the
-Audit Orchestrator (the single owner of execution order), and returns the report.
+This is the evaluation pipeline's entry point. This layer contains no audit or
+decision logic — it normalizes the request, hands the contexts to the Audit
+Orchestrator (the single owner of execution order), and returns the report.
 
 Synchronous by design for MB4: the caller submits source + outputs and receives
 the comparative report directly. Async job-based delivery for large multi-output

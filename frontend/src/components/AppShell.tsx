@@ -260,7 +260,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <SidebarNav />
         <div className="border-t border-border p-4">
           <a
-            href="https://github.com"
+            href="https://github.com/Kunal1703/AI-Trust-and-Quality-Auditor"
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-2 rounded-lg px-2 py-2 text-2xs text-content-subtle transition-colors hover:text-content-muted"

@@ -69,7 +69,7 @@ Standard summarization scorers reward what *reads* well. Veritas asks a stricter
 | 🎯 **Confidence scoring** | Every verdict carries a calibrated confidence |
 | 💬 **Explainable verdicts** | Human-readable findings + concrete fixes |
 | 🖥️ **Interactive dashboard** | Premium React SPA with a synchronized evidence explorer |
-| 📎 **Multi-format ingestion** | Audit `txt` · `md` · `html` · `pdf` sources |
+| 📎 **Text & URL ingestion** | Audit pasted text, or a live URL that's fetched & extracted |
 | 🐳 **Docker support** | Full stack up with one command |
 | 🔌 **REST API** | Clean, typed FastAPI surface |
 
@@ -111,13 +111,13 @@ Veritas spends the expensive LLM budget **only where a model is genuinely needed
 
 ```mermaid
 flowchart LR
-    A[Source + Outputs] --> B[Preprocessing<br/>audit contexts]
-    B --> C[Extraction<br/>LLM: claims & key points]
-    C --> D[Attribution<br/>retrieve-then-entail]
-    D --> E[7 Evaluators<br/>pure computation]
-    E --> F[Decision Engine<br/>layered · non-compensatory]
-    F --> G[Comparative Report]
-    G --> H[React SPA<br/>evidence explorer]
+    A["Source + Outputs"] --> B["Preprocessing<br/>audit contexts"]
+    B --> C["Extraction<br/>LLM: claims &amp; key points"]
+    C --> D["Attribution<br/>retrieve-then-entail"]
+    D --> E["7 Evaluators<br/>pure computation"]
+    E --> F["Decision Engine<br/>layered, non-compensatory"]
+    F --> G["Comparative Report"]
+    G --> H["React SPA<br/>evidence explorer"]
 ```
 
 **Grounding, in detail.** A local NLI cross-encoder (`cross-encoder/nli-deberta-v3-base`) retrieves candidate source spans for each output claim and labels every one `supported` / `neutral` / `contradicted` — on CPU, at **zero token cost**. Numeric accuracy, conciseness, and bias are fully deterministic. The LLM never sees a scoring decision; it only extracts.
@@ -213,7 +213,7 @@ backend/app/
 ├── attribution/     retrieve-then-entail grounding substrate
 ├── evaluators/      the 7 metric evaluators (pure computation units)
 ├── orchestration/   Audit Orchestrator · layered Decision Engine · report assembly
-├── preprocessing/   {source, outputs[]} → audit contexts (txt · md · html · pdf)
+├── preprocessing/   {source, outputs[]} → audit contexts (text · URL extraction)
 └── api/             FastAPI surface (/audit/outputs, /health)
 
 config/

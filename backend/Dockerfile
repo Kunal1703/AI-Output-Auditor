@@ -54,7 +54,7 @@ FROM python:3.11-slim
 
 LABEL org.opencontainers.image.title="AI Output Auditor — backend" \
       org.opencontainers.image.description="Evidence-backed auditing of AI outputs against a source." \
-      org.opencontainers.image.source="https://github.com/your-org/ai-output-auditor"
+      org.opencontainers.image.source="https://github.com/Kunal1703/AI-Trust-and-Quality-Auditor"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
