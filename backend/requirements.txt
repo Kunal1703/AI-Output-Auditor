@@ -1,4 +1,4 @@
-# AI Trust & Quality Auditor — backend dependencies (Document 4, §2).
+# AI Output Auditor — backend dependencies (Document 4, §2).
 
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.32,<1.0
@@ -25,3 +25,7 @@ langdetect>=1.0.9
 # lazily on first embed — so the scaffold still boots in a second, and it boots
 # even if this install is skipped.
 sentence-transformers>=3.0,<4.0
+
+# Tokenizer backend for the local NLI cross-encoder (DeBERTa-v3 uses a
+# SentencePiece tokenizer). Required for `cross-encoder/nli-deberta-v3-base`.
+sentencepiece>=0.2.0

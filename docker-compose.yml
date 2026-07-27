@@ -1,4 +1,4 @@
-# AI Trust & Quality Auditor — reproducible backend + frontend (Document 4, §2).
+# AI Output Auditor — reproducible backend + frontend.
 #
 #   cp backend/.env.example backend/.env     # add your GROQ_API_KEY
 #   docker compose up --build
@@ -13,13 +13,12 @@
 services:
   backend:
     build:
-      # The repo root, not backend/ — the image needs config/ and datasets/,
-      # which live above backend/. core.config resolves config/ as the parent of
-      # the app directory, so the image mirrors the repo layout rather than
-      # flattening it.
+      # The repo root, not backend/ — the image needs config/, which lives above
+      # backend/. core.config resolves config/ as the parent of the app
+      # directory, so the image mirrors the repo layout rather than flattening it.
       context: .
       dockerfile: backend/Dockerfile
-    image: ai-trust-auditor-backend:latest
+    image: ai-output-auditor-backend:latest
     container_name: auditor-backend
     env_file:
       # The one place secrets come from. Nothing is baked into the image, and
@@ -59,7 +58,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: ai-trust-auditor-frontend:latest
+    image: ai-output-auditor-frontend:latest
     container_name: auditor-frontend
     ports:
       # 5173 outside so the URL matches the dev server and the backend's CORS

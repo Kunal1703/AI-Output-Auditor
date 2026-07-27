@@ -1,4 +1,4 @@
-# AI Trust & Quality Auditor — runtime tunables.
+# AI Output Auditor — runtime tunables.
 #
 # Document 3 treats thresholds and weights as deployment configuration; the
 # reasoning rules themselves are fixed in code. Document 4 §4 designates this
@@ -199,111 +199,11 @@ prompts:
   directory: "config/prompts"
   strict_rendering: true
 
-orchestrator:
-  # Per-engine wall-clock budget. A timed-out engine yields a degraded,
-  # low-confidence AuditResult rather than crashing the run (Document 4 §12).
-  #
-  # Sized to the LLM pacing above, not to raw call latency. Under llm.
-  # tokens_per_minute the six wave-1 engines share one token budget, so an
-  # engine's calls wait their turn and its wall-clock spans much of the wave.
-  # At 120s (the pre-pacing value) a correctly-waiting engine was killed and
-  # degraded — the very failure pacing exists to prevent. 480s clears a paced
-  # wave with margin. On a paid tier with a high TPM, pacing is off and engines
-  # finish in seconds, so this ceiling is never approached.
-  engine_timeout_seconds: 480
-  max_parallel_engines: 8
-
-decision:
-  # Severity at or above which a single Critical Finding gates trust to
-  # Untrusted, non-compensatorily (Document 3 §5).
-  trust_blocking_severity: "high"
-
-  # Minimum confidence required on a trust-relevant dimension before a
-  # favorable Trust Verdict may be asserted. Below this, the run routes to
-  # Unable to Verify (Document 3 §8).
-  min_trust_confidence: 0.60
-
-  # Score floor a trust-relevant dimension must clear to count as passing.
-  # Trust is bounded by the weakest trust-relevant dimension (Document 3 §6).
-  trust_dimension_pass_threshold: 0.70
-  trust_caveat_threshold: 0.85
-
-  # Quality Verdict banding over the confidence-weighted quality score
-  # (Document 3 §7).
-  quality_bands:
-    high: 0.80
-    adequate: 0.60
-
-  # Configurable per-dimension weights for the compensatory Quality
-  # Verdict. N/A dimensions are excluded from numerator and denominator
-  # entirely (Document 3 §9) rather than reweighted here.
-  quality_weights:
-    Relevance: 1.0
-    Coverage: 1.0
-    Novelty: 0.75
-    Readability: 1.0
-    Engagement: 0.75
-    Diversity: 0.5
-
-# Per-engine tunables. Document 2 §2 puts thresholds out of its own scope and
-# Document 1 §11 makes them configuration, not code. Retuning any of these moves
-# where a line sits; none can change a frozen pipeline, or the rule that a
-# qualifying Critical Finding gates trust non-compensatorily.
-#
-# These are reasoned defaults, not measured ones. Milestone 6 validation tunes
-# them against the good/medium/poor corpus (Document 4, §11).
+# Reused deterministic-analysis tunables (AI Output Auditor). Only the two the
+# new pipeline consumes: the Readability evaluator reuses `readability`
+# (heuristic bounds) and the Conciseness evaluator reuses `novelty` (the
+# measured redundancy thresholds — do not revert the 0.60 semantic threshold).
 engines:
-  accuracy:
-    # Minimum relatedness for a retrieved passage to reach the verification
-    # judge. Below it the passage is noise, and a judge shown noise is likelier
-    # to hallucinate support than to answer "Unverifiable".
-    #
-    # Scale note: this is RAW cosine clamped at 0 (see embedding_service.
-    # relatedness), NOT cosine rescaled from [-1,1]. On this scale ~0.3 is
-    # loosely related and ~0.7 strongly related. Rescaling would compress every
-    # score into [0.5,0.9] and silently disable this threshold.
-    evidence_similarity_threshold: 0.45
-    evidence_top_k: 4
-
-    # Severity a contradicted claim's own stage-4 severity must reach before it
-    # becomes a Critical Finding.
-    contradiction_blocking_severity: "high"
-
-    # Centrality floor for raising a finding. 0 by default: a contradicted
-    # claim is a contradicted claim, and suppressing peripheral ones would hide
-    # real hallucinations.
-    min_centrality_for_finding: 0.0
-
-  credibility:
-    fabrication_severity: "high"
-    misattribution_severity: "high"
-    # Ceiling on source fetches per audit, so a document with 200 links cannot
-    # stall the run past its budget.
-    max_sources_fetched: 12
-    source_excerpt_chars: 4000
-
-  relevance:
-    # Relatedness to the prompt below which a sentence counts as scope drift.
-    # Same raw-cosine scale as accuracy.evidence_similarity_threshold.
-    scope_drift_threshold: 0.30
-
-    # Fraction of drifting sentences tolerated before drift affects the score.
-    # Some drift is normal prose — transitions, framing, caveats — and faulting
-    # the first off-topic sentence would penalise ordinary writing.
-    scope_drift_tolerance: 0.25
-    hard_requirement_blocking_severity: "high"
-
-  coverage:
-    # The threshold that keeps Coverage from over-penalizing summarization
-    # (Document 2, §7.3). An absent key point below this salience is a score
-    # effect, not a trust gate — a summary omits by design.
-    critical_omission_salience: 0.70
-    critical_omission_severity: "high"
-
-    # Credit a "Partial" key point earns. The middle value exists because a
-    # briefly-mentioned point is neither fully covered nor omitted.
-    partial_credit: 0.5
-
   readability:
     # Heuristic bounds for the Deterministic Analysis stage (Document 2, §7.6
     # stage 2). Exceeding one is a MEASUREMENT, not a verdict: the stage 3 LLM
@@ -369,63 +269,3 @@ engines:
     coverage_salience_floor: 0.60
 
     words_for_full_confidence: 120
-
-  engagement:
-    # Score penalty per CONFIRMED manipulation item, by the matched pattern's
-    # severity. A pattern match alone costs nothing — stage 6's LLM verification
-    # must confirm it first, because the regex flags an article that quotes a
-    # scam exactly as readily as the scam itself.
-    #
-    # Subtracted rather than averaged: content that manipulates its reader has
-    # done something wrong that being useful does not excuse, and averaging
-    # would let a high task-fitness score dilute it away.
-    manipulation_penalty:
-      critical: 0.35
-      high: 0.25
-      medium: 0.12
-      low: 0.05
-      info: 0.0
-
-    # Fraction of the penalty a "Borderline" item carries. Pushy phrasing is a
-    # real cost and a smaller one than deception. At 0 the middle verdict would
-    # be meaningless; at 1 it would be a synonym for Manipulative.
-    borderline_penalty_factor: 0.4
-
-  diversity:
-    # NOTE: there is no applicability threshold here, deliberately. Whether the
-    # dimension applies is a judgment stage 2 makes against the criteria in its
-    # prompt, not a number. A configurable gate would let a deployment quietly
-    # switch the only N/A in the system on or off.
-
-    # Relatedness floor for a reference passage to count as a retrieved
-    # perspective. Raw cosine, same scale as accuracy's evidence threshold, but
-    # set LOWER on purpose: a passage arguing a position the output never took
-    # is topically distant from the topic by construction, so a strict floor
-    # would retrieve only the perspectives the output already holds — which is
-    # the opposite of what this stage is for.
-    perspective_similarity_threshold: 0.35
-    perspective_top_k: 6
-
-    # External fetches, and only when the request opted into external retrieval.
-    max_sources_fetched: 6
-    source_excerpt_chars: 3000
-
-    # Score penalty per detected bias item, by severity. Subtracted rather than
-    # averaged: loaded framing is a fault that naming every viewpoint does not
-    # offset.
-    bias_penalty:
-      critical: 0.30
-      high: 0.20
-      medium: 0.10
-      low: 0.04
-      info: 0.0
-
-    # NOTE: there is deliberately no "undisclosed stance" penalty. Content that
-    # argues a position while posing as a neutral survey is classified Neutral
-    # by stage 4 ("Declared" advocacy means declared), so the strict balance
-    # standard already applies to it and the imbalance it was hiding is exactly
-    # what the score reports. A separate penalty would double-count it.
-
-jobs:
-  retention_seconds: 3600
-  max_concurrent_audits: 4

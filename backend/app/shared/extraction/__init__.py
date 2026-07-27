@@ -23,14 +23,13 @@ a change here would set one of those, it belongs in an engine, not here.
 
 from app.shared.extraction.base import ExtractionError, LLMExtractionService
 from app.shared.extraction.claims import ClaimExtractionService
+from app.shared.extraction.key_points import KeyPointExtractionService
 from app.shared.extraction.models import (
     Claim,
     ClaimType,
     ExtractionResult,
-    Requirement,
-    RequirementType,
+    KeyPoint,
 )
-from app.shared.extraction.requirements import RequirementExtractionService
 
 __all__ = [
     "Claim",
@@ -38,8 +37,7 @@ __all__ = [
     "ClaimType",
     "ExtractionError",
     "ExtractionResult",
+    "KeyPoint",
+    "KeyPointExtractionService",
     "LLMExtractionService",
-    "Requirement",
-    "RequirementExtractionService",
-    "RequirementType",
 ]

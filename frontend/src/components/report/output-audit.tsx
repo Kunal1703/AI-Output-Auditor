@@ -1,6 +1,6 @@
 /** OutputAuditView — the full audit of one output, with tabbed detail. */
 
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useState } from 'react';
 import { ShieldQuestion } from 'lucide-react';
 import { cn } from '@/lib/cn';
@@ -99,29 +99,29 @@ export function OutputAuditView({
         />
       </div>
 
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={tab}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.22 }}
-        >
-          {tab === 'metrics' && <MetricGrid metrics={allMetrics(audit)} />}
-          {tab === 'findings' && <FindingsList findings={audit.findings} onSelect={onFindingSelect} />}
-          {tab === 'recommendations' && <RecommendationsList recs={audit.recommendations} />}
-          {tab === 'evidence' && (
-            <EvidenceExplorer
-              sourceText={sourceText}
-              outputText={outputText}
-              attribution={audit.attribution}
-              findings={audit.findings}
-              selectedId={selectedId}
-              onSelectId={setSelectedId}
-            />
-          )}
-        </motion.div>
-      </AnimatePresence>
+      {/* Enter-only keyed transition: the new panel mounts immediately on tab
+          change (no dependency on an exit animation completing), so it is robust
+          in low-frame environments while still fading in smoothly. */}
+      <motion.div
+        key={tab}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+      >
+        {tab === 'metrics' && <MetricGrid metrics={allMetrics(audit)} />}
+        {tab === 'findings' && <FindingsList findings={audit.findings} onSelect={onFindingSelect} />}
+        {tab === 'recommendations' && <RecommendationsList recs={audit.recommendations} />}
+        {tab === 'evidence' && (
+          <EvidenceExplorer
+            sourceText={sourceText}
+            outputText={outputText}
+            attribution={audit.attribution}
+            findings={audit.findings}
+            selectedId={selectedId}
+            onSelectId={setSelectedId}
+          />
+        )}
+      </motion.div>
     </div>
   );
 }

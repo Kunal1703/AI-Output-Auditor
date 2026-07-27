@@ -7,7 +7,7 @@
  */
 
 import { lazy, Suspense } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import AppShell from '@/components/AppShell';
 import Landing from '@/pages/Landing';
@@ -33,26 +33,25 @@ export default function App() {
   const location = useLocation();
   return (
     <AppShell>
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={location.pathname.split('/')[1] || 'home'}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -6 }}
-          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <Suspense fallback={<PageFallback />}>
-            <Routes location={location}>
-              <Route path="/" element={<Landing />} />
-              <Route path="/audit" element={<Audit />} />
-              <Route path="/report/:auditId" element={<Report />} />
-              <Route path="/history" element={<History />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-        </motion.div>
-      </AnimatePresence>
+      {/* Enter-only keyed page transition — the incoming page mounts immediately
+          (no exit-completion dependency), robust and smooth. */}
+      <motion.div
+        key={location.pathname.split('/')[1] || 'home'}
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+      >
+        <Suspense fallback={<PageFallback />}>
+          <Routes location={location}>
+            <Route path="/" element={<Landing />} />
+            <Route path="/audit" element={<Audit />} />
+            <Route path="/report/:auditId" element={<Report />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
+      </motion.div>
     </AppShell>
   );
 }

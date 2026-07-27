@@ -43,7 +43,6 @@ from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.errors import ConfigurationError
-from app.shared.schemas import Severity
 
 __all__ = [
     "LLMSettings",
@@ -58,18 +57,9 @@ __all__ = [
     "VerdictSettings",
     "RetrievalSettings",
     "PromptSettings",
-    "OrchestratorSettings",
-    "DecisionSettings",
-    "AccuracyEngineSettings",
-    "CredibilityEngineSettings",
-    "RelevanceEngineSettings",
-    "CoverageEngineSettings",
     "ReadabilityEngineSettings",
     "NoveltyEngineSettings",
-    "EngagementEngineSettings",
-    "DiversityEngineSettings",
     "EngineSettings",
-    "JobSettings",
     "Settings",
     "get_settings",
     "load_settings",
@@ -80,7 +70,7 @@ __all__ = [
 #: ``backend/`` — the directory ``uvicorn app.main:app`` is launched from.
 BACKEND_ROOT: Path = Path(__file__).resolve().parents[2]
 
-#: The repository root, which owns ``config/`` and ``datasets/``.
+#: The repository root, which owns ``config/``.
 PROJECT_ROOT: Path = BACKEND_ROOT.parent
 
 #: Which environment variable holds the API key, per provider. Keeping these
@@ -513,175 +503,6 @@ class PromptSettings(BaseModel):
     )
 
 
-class OrchestratorSettings(BaseModel):
-    """Settings for the Engine Orchestrator."""
-
-    engine_timeout_seconds: float = Field(default=120.0, gt=0)
-    max_parallel_engines: int = Field(default=8, gt=0)
-
-
-class DecisionSettings(BaseModel):
-    """Thresholds and weights for the Decision Engine.
-
-    Document 3 is explicit that these are deployment configuration while the
-    rules that consume them are fixed. Retuning a threshold changes *where* the
-    line sits; it can never change the fact that a qualifying Critical Finding
-    gates trust, or that insufficient confidence blocks a Trusted verdict.
-    """
-
-    trust_blocking_severity: Severity = Field(
-        default=Severity.HIGH,
-        description="A Critical Finding at or above this severity forces "
-        "Untrusted (Document 3, §5).",
-    )
-    min_trust_confidence: float = Field(
-        default=0.60,
-        ge=0.0,
-        le=1.0,
-        description="Below this on a trust-relevant dimension, no favorable "
-        "trust verdict may be asserted; the run routes to Unable to Verify.",
-    )
-    trust_dimension_pass_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
-    trust_caveat_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
-    quality_bands: dict[str, float] = Field(
-        default_factory=lambda: {"high": 0.80, "adequate": 0.60}
-    )
-    quality_weights: dict[str, float] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _bands_ordered(self) -> "DecisionSettings":
-        high = self.quality_bands.get("high")
-        adequate = self.quality_bands.get("adequate")
-        if high is None or adequate is None:
-            raise ValueError("quality_bands must define both 'high' and 'adequate'")
-        if not 0.0 <= adequate < high <= 1.0:
-            raise ValueError(
-                "quality_bands must satisfy 0 <= adequate < high <= 1; "
-                f"got adequate={adequate}, high={high}"
-            )
-        if self.trust_caveat_threshold < self.trust_dimension_pass_threshold:
-            raise ValueError(
-                "trust_caveat_threshold must be >= trust_dimension_pass_threshold"
-            )
-        return self
-
-
-class AccuracyEngineSettings(BaseModel):
-    """Tunables for the Accuracy engine (Document 2, §7.2).
-
-    Document 2 §2 puts thresholds out of its own scope, and Document 1 §11 makes
-    them configuration rather than code. Retuning these moves where a line sits;
-    none of them can change the frozen pipeline or the rule that a qualifying
-    Critical Finding gates trust.
-    """
-
-    evidence_similarity_threshold: float = Field(
-        default=0.45,
-        ge=0.0,
-        le=1.0,
-        description="Minimum similarity for a retrieved passage to be offered "
-        "to the verification judge. Below it, the passage is noise — and a "
-        "judge shown noise is more likely to hallucinate support than to say "
-        "'unverifiable'.",
-    )
-    evidence_top_k: int = Field(
-        default=4, gt=0, description="Passages retrieved per claim."
-    )
-    contradiction_blocking_severity: Severity = Field(
-        default=Severity.HIGH,
-        description="Severity floor at which a contradicted claim becomes a "
-        "Critical Finding. Stage 4 assigns each claim its own severity; this is "
-        "the bar it must clear.",
-    )
-    min_centrality_for_finding: float = Field(
-        default=0.0,
-        ge=0.0,
-        le=1.0,
-        description="Centrality floor for raising a Critical Finding on a "
-        "contradicted claim. Defaults to 0 — a contradicted claim is a "
-        "contradicted claim, and suppressing peripheral ones by default would "
-        "hide real hallucinations.",
-    )
-
-
-class CredibilityEngineSettings(BaseModel):
-    """Tunables for the Credibility engine (Document 2, §7.4)."""
-
-    fabrication_severity: Severity = Field(
-        default=Severity.HIGH,
-        description="Severity for a citation that does not resolve.",
-    )
-    misattribution_severity: Severity = Field(
-        default=Severity.HIGH,
-        description="Severity for a citation whose source is unrelated to, or "
-        "contradicts, the claim it was offered for.",
-    )
-    max_sources_fetched: int = Field(
-        default=12,
-        gt=0,
-        description="Ceiling on source fetches per audit, so a document with "
-        "200 links cannot stall the run past its budget.",
-    )
-    source_excerpt_chars: int = Field(
-        default=4000,
-        gt=0,
-        description="Characters of fetched source text shown to the grounding "
-        "judge per citation.",
-    )
-
-
-class RelevanceEngineSettings(BaseModel):
-    """Tunables for the Relevance engine (Document 2, §7.1)."""
-
-    scope_drift_threshold: float = Field(
-        default=0.30,
-        ge=0.0,
-        le=1.0,
-        description="Similarity floor, against the prompt, below which a "
-        "sentence counts as scope drift (§7.1, stage 6).",
-    )
-    scope_drift_tolerance: float = Field(
-        default=0.25,
-        ge=0.0,
-        le=1.0,
-        description="Fraction of drifting sentences tolerated before scope "
-        "drift affects the score. Some drift is normal — transitions, framing, "
-        "caveats — and penalizing the first off-topic sentence would punish "
-        "ordinary prose.",
-    )
-    hard_requirement_blocking_severity: Severity = Field(
-        default=Severity.HIGH,
-        description="Severity assigned to a violated Hard requirement.",
-    )
-
-
-class CoverageEngineSettings(BaseModel):
-    """Tunables for the Coverage engine (Document 2, §7.3)."""
-
-    critical_omission_salience: float = Field(
-        default=0.70,
-        ge=0.0,
-        le=1.0,
-        description="Salience floor at which an absent key point becomes a "
-        "Critical Omission. This is the threshold that keeps Coverage from "
-        "over-penalizing summarization (§7.3): below it, an omission is a "
-        "score effect, not a trust gate.",
-    )
-    critical_omission_severity: Severity = Field(
-        default=Severity.HIGH,
-        description="Severity floor an absent key point's own severity must "
-        "clear to become a Critical Omission.",
-    )
-    partial_credit: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="Credit a 'Partial' key point earns toward the score. The "
-        "middle value exists because a briefly-mentioned point is neither fully "
-        "covered nor omitted.",
-    )
-
-
 class ReadabilityEngineSettings(BaseModel):
     """Tunables for the Readability engine (Document 2, §7.6).
 
@@ -826,127 +647,18 @@ class NoveltyEngineSettings(BaseModel):
     )
 
 
-class EngagementEngineSettings(BaseModel):
-    """Tunables for the Engagement engine (Document 2, §7.7)."""
+class EngineSettings(BaseModel):
+    """Reused deterministic-analysis tunables.
 
-    manipulation_penalty: dict[str, float] = Field(
-        default_factory=lambda: {
-            "critical": 0.35,
-            "high": 0.25,
-            "medium": 0.12,
-            "low": 0.05,
-            "info": 0.0,
-        },
-        description="Score penalty per confirmed manipulation item, by the "
-        "pattern's severity. Subtracted rather than averaged: content that "
-        "manipulates its reader has done something wrong that being useful does "
-        "not excuse, and averaging would let a high fitness score dilute it.",
-    )
-    borderline_penalty_factor: float = Field(
-        default=0.4,
-        ge=0.0,
-        le=1.0,
-        description="Fraction of the penalty a *Borderline* item carries. Pushy "
-        "phrasing is a real cost and a smaller one than deception; a factor of "
-        "0 would make the middle verdict meaningless and 1 would make it a "
-        "synonym for Manipulative.",
-    )
-
-    @model_validator(mode="after")
-    def _penalties_cover_severities(self) -> "EngagementEngineSettings":
-        missing = {s.value for s in Severity} - set(self.manipulation_penalty)
-        if missing:
-            raise ValueError(
-                "engagement.manipulation_penalty must define a penalty for every "
-                f"severity; missing: {sorted(missing)}"
-            )
-        return self
-
-
-class DiversityEngineSettings(BaseModel):
-    """Tunables for the Diversity engine (Document 2, §7.8).
-
-    Note:
-        There is no threshold here for *applicability*. Whether the dimension
-        applies is a judgment made by stage 2 against the criteria in its prompt,
-        not a number to tune — and a configurable applicability gate would let a
-        deployment quietly switch the only N/A in the system on or off.
+    Only the two the AI Output Auditor still consumes: the Readability evaluator
+    reuses ``readability`` (heuristic bounds) and the Conciseness evaluator
+    reuses ``novelty`` (the measured redundancy thresholds).
     """
 
-    perspective_similarity_threshold: float = Field(
-        default=0.35,
-        ge=0.0,
-        le=1.0,
-        description="Relatedness floor for a reference passage to count as a "
-        "retrieved perspective. **Raw cosine** (see relatedness), not rescaled. "
-        "Set lower than Accuracy's evidence floor on purpose: a passage arguing "
-        "a position the output never took is topically distant from the topic "
-        "sentence by construction, and a strict floor would retrieve only the "
-        "perspectives the output already holds.",
-    )
-    perspective_top_k: int = Field(
-        default=6, gt=0, description="Reference passages retrieved per audit."
-    )
-    max_sources_fetched: int = Field(
-        default=6,
-        gt=0,
-        description="Ceiling on external fetches, and only when the request "
-        "opted into external retrieval.",
-    )
-    source_excerpt_chars: int = Field(
-        default=3000,
-        gt=0,
-        description="Characters of a fetched source shown to viewpoint "
-        "extraction.",
-    )
-    bias_penalty: dict[str, float] = Field(
-        default_factory=lambda: {
-            "critical": 0.30,
-            "high": 0.20,
-            "medium": 0.10,
-            "low": 0.04,
-            "info": 0.0,
-        },
-        description="Score penalty per detected bias item, by severity. "
-        "Subtracted rather than averaged: loaded framing is a fault that naming "
-        "every viewpoint does not offset.",
-    )
-
-    @model_validator(mode="after")
-    def _penalties_cover_severities(self) -> "DiversityEngineSettings":
-        missing = {s.value for s in Severity} - set(self.bias_penalty)
-        if missing:
-            raise ValueError(
-                "diversity.bias_penalty must define a penalty for every "
-                f"severity; missing: {sorted(missing)}"
-            )
-        return self
-
-
-class EngineSettings(BaseModel):
-    """Per-engine tunables, grouped."""
-
-    accuracy: AccuracyEngineSettings = Field(default_factory=AccuracyEngineSettings)
-    credibility: CredibilityEngineSettings = Field(
-        default_factory=CredibilityEngineSettings
-    )
-    relevance: RelevanceEngineSettings = Field(default_factory=RelevanceEngineSettings)
-    coverage: CoverageEngineSettings = Field(default_factory=CoverageEngineSettings)
     readability: ReadabilityEngineSettings = Field(
         default_factory=ReadabilityEngineSettings
     )
     novelty: NoveltyEngineSettings = Field(default_factory=NoveltyEngineSettings)
-    engagement: EngagementEngineSettings = Field(
-        default_factory=EngagementEngineSettings
-    )
-    diversity: DiversityEngineSettings = Field(default_factory=DiversityEngineSettings)
-
-
-class JobSettings(BaseModel):
-    """Settings for the async audit job store (Document 4, §7)."""
-
-    retention_seconds: float = Field(default=3600.0, gt=0)
-    max_concurrent_audits: int = Field(default=4, gt=0)
 
 
 class Settings(BaseSettings):
@@ -965,7 +677,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "AI Trust & Quality Auditor"
+    app_name: str = "AI Output Auditor"
     version: str = "1.0"
     environment: str = Field(
         default="development", description="development | staging | production."
@@ -995,10 +707,7 @@ class Settings(BaseSettings):
     verdict: VerdictSettings = Field(default_factory=VerdictSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     prompts: PromptSettings = Field(default_factory=PromptSettings)
-    orchestrator: OrchestratorSettings = Field(default_factory=OrchestratorSettings)
-    decision: DecisionSettings = Field(default_factory=DecisionSettings)
     engines: EngineSettings = Field(default_factory=EngineSettings)
-    jobs: JobSettings = Field(default_factory=JobSettings)
 
     @property
     def prompts_directory(self) -> Path:
@@ -1131,10 +840,7 @@ def load_settings(settings_file: Path | None = None) -> Settings:
         "verdict",
         "retrieval",
         "prompts",
-        "orchestrator",
-        "decision",
         "engines",
-        "jobs",
     ):
         if isinstance(raw.get(section), dict):
             overrides[section] = raw[section]

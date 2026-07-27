@@ -1,9 +1,9 @@
-"""API layer — the HTTP surface (Document 4, §7).
+"""API layer — the HTTP surface.
 
-Accepts requests, creates and tracks async audit jobs, returns the report, and
-exposes ``/health``.
+Exposes ``POST /audit/outputs`` (source + outputs → ``ComparativeReport``) and
+``GET /health``.
 
-Deliberately thin. Document 4 §5: the API layer "must NOT contain audit or
-decision logic" — it delegates to Preprocessing, the orchestrator, and the
-Decision Engine, and depends only on the ``AuditReport`` contract.
+Deliberately thin: it accepts requests and returns the report, delegating all
+audit and decision logic to Preprocessing, the Audit Orchestrator, and the
+Decision Engine.
 """

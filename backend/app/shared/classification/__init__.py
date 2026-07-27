@@ -33,25 +33,13 @@ from app.shared.classification.base import (
     coerce_unit_float,
     render_units,
 )
-from app.shared.classification.claims import ClaimCentralityAssigner, ClaimClassifier
-from app.shared.classification.key_points import (
-    CategorySeverityAssigner,
-    SalienceAssigner,
-)
-from app.shared.classification.requirements import RequirementClassifier
-from app.shared.classification.sources import SourceClassifier, domain_of
+from app.shared.classification.key_points import SalienceAssigner
 
 __all__ = [
-    "CategorySeverityAssigner",
-    "ClaimCentralityAssigner",
-    "ClaimClassifier",
     "ClassificationError",
     "LLMClassifier",
-    "RequirementClassifier",
     "SalienceAssigner",
-    "SourceClassifier",
     "coerce_enum",
     "coerce_unit_float",
-    "domain_of",
     "render_units",
 ]

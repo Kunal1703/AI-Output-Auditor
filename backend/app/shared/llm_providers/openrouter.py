@@ -65,8 +65,8 @@ class OpenRouterProvider(LLMProvider):
         self,
         api_key: str | None,
         base_url: str | None = None,
-        app_url: str = "https://github.com/ai-trust-auditor",
-        app_title: str = "AI Trust & Quality Auditor",
+        app_url: str = "https://github.com/ai-output-auditor",
+        app_title: str = "AI Output Auditor",
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._api_key = api_key

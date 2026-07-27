@@ -1,19 +1,22 @@
-"""AI Trust & Quality Auditor — backend application package.
+"""AI Output Auditor — backend application package.
 
-Implements the frozen architecture of Documents 1–4:
+Audits one or more outputs (human- or LLM-written summaries/answers) against a
+source article and returns an evidence-backed comparative report.
 
-* ``core`` — configuration, logging, errors, and the frozen dimension matrix.
-* ``shared`` — Shared Services and the ``AuditResult`` / ``AuditReport``
-  contracts (Document 2 §5–§6, Document 4 §4).
-* ``audit_engines`` — the eight engines and the orchestrator (Document 2 §7–§8).
-* ``decision_engine`` — the Document 3 decision workflow.
-* ``preprocessing`` — text / URL / file normalization.
-* ``api`` — the FastAPI surface (Document 4 §7).
-* ``app`` — the service container that wires it all together (Document 4 §4).
+* ``core`` — configuration, logging, errors, and the metric/layer matrix.
+* ``shared`` — the shared services (LLM, embeddings, NLI, retrieval, evidence,
+  extraction) and the contract schemas.
+* ``attribution`` — the retrieve-then-entail grounding substrate.
+* ``evaluators`` — the metric evaluators (Faithfulness, Numeric Accuracy,
+  Coverage, Meaning Preservation, Readability, Conciseness, Bias).
+* ``orchestration`` — the Audit Orchestrator, layered Decision Engine, and report
+  assembly.
+* ``preprocessing`` — text / URL normalization into audit contexts.
+* ``api`` — the FastAPI surface.
+* ``app`` — the service container that wires it all together.
 
-The one-way dependency graph of Document 1 §6 is a design constraint, not an
-accident: Configuration → Shared Services → Audit Engines → Decision Engine →
-API → Frontend. Nothing lower may import something higher.
+The dependency graph is one-way: Configuration → Shared Services → Attribution →
+Evaluators → Decision → Assembly → API. Nothing lower imports something higher.
 """
 
 __version__ = "1.0.0"

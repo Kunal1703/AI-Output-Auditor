@@ -1,4 +1,4 @@
-# AI Trust & Quality Auditor — frontend image (Document 4, §2: Docker).
+# AI Output Auditor — frontend image (Document 4, §2: Docker).
 #
 # Build with node, serve with nginx. The app is a static bundle after `vite
 # build`, so shipping node into the runtime would ship a JavaScript runtime to
@@ -27,7 +27,7 @@ RUN npm run build
 # --------------------------------------------------------------------------- #
 FROM nginx:1.27-alpine
 
-LABEL org.opencontainers.image.title="AI Trust & Quality Auditor — frontend"
+LABEL org.opencontainers.image.title="AI Output Auditor — frontend"
 
 COPY --from=builder /build/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf

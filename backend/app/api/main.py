@@ -28,13 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import (
-    routes_audit,
-    routes_health,
-    routes_output_audit,
-    routes_report,
-)
-from app.api.jobs import JobStore
+from app.api import routes_health, routes_output_audit
 from app.app import build_container
 from app.core.config import Settings
 from app.core.errors import AuditorError
@@ -45,15 +39,16 @@ __all__ = ["create_app"]
 logger = get_logger(__name__)
 
 DESCRIPTION = """
-Evaluates AI-generated content and returns a complete, evidence-backed audit:
+The AI Output Auditor evaluates one or more outputs (human- or LLM-written)
+against a source article and returns an evidence-backed comparative report:
 **what** the verdict is, **what evidence** supports it, **how confident** the
 auditor is, and **what to fix**.
 
-Trust and Quality are reported on two separate axes and are never fused into a
-single number. Trust is non-compensatory — one qualifying critical finding, such
-as a fabricated citation, gates the trust verdict regardless of how well the
-content scores elsewhere. Where evidence is insufficient the auditor returns
-*Unable to Verify* rather than guessing.
+Verdicts are layered and non-compensatory — a grounding failure (a hallucination,
+a wrong figure, a contradiction) caps the result regardless of how well the
+output reads. Where grounding cannot be established with confidence the auditor
+returns *Unable to Verify* rather than guessing. Every claim traces to a source
+span; no external knowledge is used.
 """
 
 
@@ -84,7 +79,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # with nli_ready=false, and no metric consumes NLI until MB2.
     await container.warm_nli()
     app.state.container = container
-    app.state.jobs = JobStore(retention_seconds=container.settings.jobs.retention_seconds)
     logger.info(
         "auditor api started",
         extra=bind(
@@ -110,7 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         The configured ASGI application.
     """
     app = FastAPI(
-        title="AI Trust & Quality Auditor",
+        title="AI Output Auditor",
         description=DESCRIPTION,
         version="1.0.0",
         lifespan=_lifespan,
@@ -173,7 +167,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(routes_health.router)
-    app.include_router(routes_audit.router)
     app.include_router(routes_output_audit.router)
-    app.include_router(routes_report.router)
     return app

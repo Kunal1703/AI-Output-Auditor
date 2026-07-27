@@ -1,4 +1,4 @@
-# AI Trust & Quality Auditor — backend image (Document 4, §2: Docker).
+# AI Output Auditor — backend image (Document 4, §2: Docker).
 #
 # Two stages, and the split exists for one reason: sentence-transformers pulls
 # torch, which is ~2GB of build-time weight that the runtime does not need to
@@ -31,25 +31,30 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Requirements first, so a source edit does not re-run the torch install.
-COPY requirements.txt requirements-m2.txt ./
+# Requirements first, so a source edit does not re-run the torch install. Paths
+# are relative to the build context, which is the repo root (see docker-compose).
+COPY backend/requirements.txt ./
 RUN pip install --upgrade pip \
-    && pip install -r requirements-m2.txt
+    && pip install -r requirements.txt
 
-# Bake the embedding model into the image. `all-MiniLM-L6-v2` is ~90MB and is
-# the only model the auditor loads locally (Document 4, §2).
+# Bake both local models into the image so the container never reaches the
+# network for them at runtime (HF_HUB_OFFLINE=1 below): the embedding model
+# (`all-MiniLM-L6-v2`, ~90MB) and the NLI cross-encoder that backs Layer-1
+# grounding and Attribution (`cross-encoder/nli-deberta-v3-base`, ~180MB).
 ENV HF_HOME=/opt/models
 RUN python -c "from sentence_transformers import SentenceTransformer; \
-    SentenceTransformer('all-MiniLM-L6-v2')"
+    SentenceTransformer('all-MiniLM-L6-v2')" \
+    && python -c "from sentence_transformers import CrossEncoder; \
+    CrossEncoder('cross-encoder/nli-deberta-v3-base')"
 
 # --------------------------------------------------------------------------- #
 # Stage 2 — runtime
 # --------------------------------------------------------------------------- #
 FROM python:3.11-slim
 
-LABEL org.opencontainers.image.title="AI Trust & Quality Auditor — backend" \
-      org.opencontainers.image.description="Evidence-backed trust and quality audits of AI-generated content." \
-      org.opencontainers.image.source="https://github.com/your-org/ai-trust-auditor"
+LABEL org.opencontainers.image.title="AI Output Auditor — backend" \
+      org.opencontainers.image.description="Evidence-backed auditing of AI outputs against a source." \
+      org.opencontainers.image.source="https://github.com/your-org/ai-output-auditor"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -72,7 +77,6 @@ WORKDIR /app
 # so the layout inside the image must mirror the repo, not flatten it.
 COPY --chown=auditor:auditor backend/app /app/backend/app
 COPY --chown=auditor:auditor config /app/config
-COPY --chown=auditor:auditor datasets /app/datasets
 
 USER auditor
 WORKDIR /app/backend

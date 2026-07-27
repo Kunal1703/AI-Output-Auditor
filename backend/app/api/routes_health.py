@@ -48,7 +48,6 @@ async def health(container: ServiceContainer = Depends(get_container)) -> Health
         llm_configured=bool(facts["llm_configured"]),
         llm_reachable=bool(facts["llm_reachable"]),
         llm_model_available=facts["llm_model_available"],  # type: ignore[arg-type]
-        engines_registered=int(facts["engines_registered"]),  # type: ignore[arg-type]
         embedding_model=str(facts["embedding_model"]),
         embedding_cache_enabled=bool(facts["embedding_cache_enabled"]),
         embedding_cache_hit_rate=float(facts["embedding_cache_hit_rate"]),  # type: ignore[arg-type]

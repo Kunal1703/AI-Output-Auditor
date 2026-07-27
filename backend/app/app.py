@@ -1,107 +1,53 @@
-"""Service container — wiring and dependency injection.
+"""Service container — wiring and dependency injection for the AI Output Auditor.
 
-Document 4 §3 designates this module ``app.py``: "wiring / dependency
-injection". §4 states the rule it implements: services are "constructed once in
-``app.py``" and handed to engines and the Decision Engine.
+The single composition root. Every service is constructed once here at startup
+and injected into the pipeline; nothing reaches for a module-level global.
 
 **Why a container instead of module-level globals.** Every service here is
 stateful in a way that matters — the LLM provider holds a connection pool, the
-embedding service holds a model and a cache, and the evidence store is scoped to
-a single run. Constructing them once at startup means eight concurrent engines
-share one pool rather than opening eight. Injecting them rather than importing
-them means a test can swap the LLM for a fake and get deterministic, offline
-engine suites (Document 4, §10).
+embedding service holds a model and a cache, the NLI service holds the local
+cross-encoder. Constructing them once means the whole pipeline shares one of each
+rather than opening several, and injecting them means a test can swap the LLM for
+a fake and run offline.
 
-**Three scopes, deliberately separated:**
+**Two scopes, deliberately separated:**
 
 * :class:`ServiceContainer` — **application-scoped**. Built once at startup, torn
-  down at shutdown. The embedding cache lives here so it spans runs: re-auditing
-  the same content, or two texts sharing boilerplate, costs one encode.
-* :meth:`ServiceContainer.engine_services` — **run-scoped**. The evidence store
-  and recommendation service mint ids that must be unique within a run and must
-  not leak across runs. Sharing them application-wide would let evidence from
-  one audit resolve inside another's report.
-* The ``SharedContext`` — **per audit**, produced by Preprocessing and passed
-  through the orchestrator. Carries the content and the derivation store.
+  down at shutdown. The embedding cache lives here so it spans runs.
+* The per-output ``EvidenceStore`` — **run-scoped**, created inside the
+  :class:`~app.orchestration.audit_orchestrator.AuditOrchestrator` for each
+  output so evidence ids are unique within a run and never leak across runs.
 """
 
 from __future__ import annotations
 
-from app.audit_engines.base import EngineServices
-from app.audit_engines.registry import (
-    build_engines,
-    registered_dimensions,
-    validate_registry,
-)
-from app.audit_engines.orchestrator import EngineOrchestrator
+from app.attribution.attribution import AttributionService
 from app.core.config import Settings, load_settings
 from app.core.errors import ConfigurationError
 from app.core.logging import bind, configure_logging, get_logger
-from app.decision_engine.workflow import DecisionEngine
+from app.evaluators.bias import BiasEvaluator
+from app.evaluators.conciseness import ConcisenessEvaluator
+from app.evaluators.coverage import CoverageEvaluator
+from app.evaluators.faithfulness import FaithfulnessEvaluator
+from app.evaluators.meaning_preservation import MeaningPreservationEvaluator
+from app.evaluators.numeric_accuracy import NumericAccuracyEvaluator
+from app.evaluators.readability import ReadabilityEvaluator
+from app.orchestration.audit_orchestrator import AuditOrchestrator
+from app.orchestration.decision import GroundingDecisionEngine
 from app.preprocessing.content_extractor import DefaultContentExtractor
 from app.preprocessing.input_router import DefaultInputRouter, InputRouter
+from app.shared.classification.key_points import SalienceAssigner
 from app.shared.confidence_service import DefaultConfidenceService
 from app.shared.deterministic_validators import DefaultDeterministicValidators
 from app.shared.document_analysis import warm_language_detection
 from app.shared.embedding_service import LocalEmbeddingService, build_embedding_cache
-from app.shared.nli_service import LocalNLIService, NLIService
-from app.attribution.attribution import AttributionService
-from app.evaluators.faithfulness import FaithfulnessEvaluator
-from app.evaluators.numeric_accuracy import NumericAccuracyEvaluator
-from app.evaluators.coverage import CoverageEvaluator
-from app.evaluators.meaning_preservation import MeaningPreservationEvaluator
-from app.evaluators.readability import ReadabilityEvaluator
-from app.evaluators.conciseness import ConcisenessEvaluator
-from app.evaluators.bias import BiasEvaluator
-from app.orchestration.audit_orchestrator import AuditOrchestrator
-from app.orchestration.decision import GroundingDecisionEngine
-from app.shared.evidence_store import InMemoryEvidenceStore
-from app.shared.classification.claims import ClaimCentralityAssigner, ClaimClassifier
-from app.shared.classification.key_points import (
-    CategorySeverityAssigner,
-    SalienceAssigner,
-)
-from app.shared.classification.diversity import (
-    ApplicabilityClassifier,
-    StanceContractDetector,
-)
-from app.shared.classification.readability import (
-    IssueClassifier,
-    IssueSeverityAssigner,
-)
-from app.shared.classification.requirements import RequirementClassifier
-from app.shared.classification.sources import SourceClassifier
-from app.shared.extraction.citations import CitationExtractionService
 from app.shared.extraction.claims import ClaimExtractionService
 from app.shared.extraction.key_points import KeyPointExtractionService
-from app.shared.extraction.requirements import RequirementExtractionService
-from app.shared.extraction.viewpoints import ViewpointExtractionService
-from app.shared.mapping import ClaimCitationMapper
-from app.shared.verification.claims import ClaimVerificationJudge
-from app.shared.verification.coverage import CoverageVerificationJudge
-from app.shared.task_identification import TaskIdentificationStage
-from app.shared.verification.diversity import (
-    BalanceEvaluationJudge,
-    BiasDetectionStage,
-)
-from app.shared.verification.engagement import (
-    ManipulationVerificationJudge,
-    TaskFitnessJudge,
-)
-from app.shared.verification.grounding import GroundingVerificationJudge
-from app.shared.verification.novelty import FunctionalRepetitionJudge
-from app.shared.verification.readability import ReadabilityReviewJudge
-from app.shared.verification.requirements import RequirementEvaluationJudge
 from app.shared.llm_providers.registry import build_provider
 from app.shared.llm_service import DefaultLLMService, LLMService
+from app.shared.nli_service import LocalNLIService, NLIService
 from app.shared.prompt_manager import FilePromptManager
-from app.shared.recommendation_service import DefaultRecommendationService
 from app.shared.retrieval_service import DefaultRetrievalService
-from app.shared.text_segmentation import TextSegmenter
-
-# Importing the engines package registers all eight engines by side effect, so
-# validate_registry() below can prove none is missing before we serve traffic.
-import app.audit_engines  # noqa: F401  (registration side effects)
 
 __all__ = ["ServiceContainer", "build_container"]
 
@@ -117,16 +63,16 @@ class ServiceContainer:
 
     Attributes:
         settings: The configuration in force.
-        llm: The Shared LLM Service — the only path from an engine to a model.
-        embedding_cache: The shared embedding cache. Application-scoped so
-            Relevance and Novelty share one entry per text (Document 4, §12).
+        llm: The Shared LLM Service — the only path to a model.
+        embedding_cache: The shared embedding cache (application-scoped).
         embeddings: The Shared Embedding Service.
+        nli: The local NLI cross-encoder — the backbone of Layer 1 & Attribution.
         retrieval: The Shared Retrieval Service.
         prompts: The Prompt Manager.
-        validators: The Deterministic Validators.
+        validators: The Deterministic Validators (readability heuristics).
         confidence: The Shared Confidence Estimator.
-        input_router: Preprocessing entry point; produces the ``SharedContext``.
-        decision_engine: The Document 3 reasoning layer.
+        input_router: Preprocessing entry point; produces the audit contexts.
+        audit_orchestrator: The sole owner of evaluator execution order.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -135,81 +81,37 @@ class ServiceContainer:
         provider = build_provider(settings)
         self.llm: LLMService = DefaultLLMService(provider, settings)
 
-        # Built here, not inside the embedding service: one cache shared by
-        # every engine and every run is the entire point (Document 4, §12).
+        # Built here, not inside the embedding service: one cache shared across
+        # every evaluator and every run is the point.
         self.embedding_cache = build_embedding_cache(settings)
         self.embeddings = LocalEmbeddingService(settings, cache=self.embedding_cache)
 
-        # Local NLI cross-encoder — the backbone of the new evaluation
-        # pipeline's Layer 1 and Attribution (AI Output Auditor, MB1). Same
+        # Local NLI cross-encoder — the backbone of Layer 1 and Attribution. Same
         # dependency class as embeddings; loaded lazily (or warmed at startup),
-        # so constructing it here never pulls in torch. No metric consumes it
-        # until MB2.
+        # so constructing it here never pulls in torch.
         self.nli: NLIService = LocalNLIService(settings)
 
         self.retrieval = DefaultRetrievalService(settings, self.embeddings)
         self.prompts = FilePromptManager(settings)
         self.validators = DefaultDeterministicValidators(settings)
         self.confidence = DefaultConfidenceService()
-        self.segmenter = TextSegmenter()
 
-        # LLM Extraction (§5.1), Classification & Weighting (§5.2), and
-        # Verification / Judge (§5.4). All stateless and provider-agnostic —
-        # they hold only the LLM Service and the Prompt Manager — so they are
-        # application-scoped rather than rebuilt per run.
-        self.requirement_extraction = RequirementExtractionService(
-            self.llm, self.prompts
-        )
+        # LLM extraction / weighting stages the pipeline reuses. Stateless and
+        # provider-agnostic (they hold only the LLM Service and Prompt Manager),
+        # so they are application-scoped.
         self.claim_extraction = ClaimExtractionService(self.llm, self.prompts)
         self.key_point_extraction = KeyPointExtractionService(self.llm, self.prompts)
-        self.citation_extraction = CitationExtractionService(self.llm, self.prompts)
-        self.viewpoint_extraction = ViewpointExtractionService(self.llm, self.prompts)
-
-        self.claim_classifier = ClaimClassifier(self.llm, self.prompts)
-        self.claim_centrality = ClaimCentralityAssigner(self.llm, self.prompts)
-        self.requirement_classifier = RequirementClassifier(self.llm, self.prompts)
         self.salience_assigner = SalienceAssigner(self.llm, self.prompts)
-        self.category_severity = CategorySeverityAssigner(self.llm, self.prompts)
-        self.source_classifier = SourceClassifier(self.llm, self.prompts)
-        self.issue_classifier = IssueClassifier(self.llm, self.prompts)
-        self.issue_severity = IssueSeverityAssigner(self.llm, self.prompts)
-        self.applicability_classifier = ApplicabilityClassifier(self.llm, self.prompts)
-        self.stance_contract = StanceContractDetector(self.llm, self.prompts)
 
-        self.claim_verification = ClaimVerificationJudge(self.llm, self.prompts)
-        self.coverage_verification = CoverageVerificationJudge(self.llm, self.prompts)
-        self.grounding_verification = GroundingVerificationJudge(self.llm, self.prompts)
-        self.requirement_evaluation = RequirementEvaluationJudge(self.llm, self.prompts)
-        self.readability_review = ReadabilityReviewJudge(self.llm, self.prompts)
-        self.functional_repetition = FunctionalRepetitionJudge(self.llm, self.prompts)
-        self.task_fitness = TaskFitnessJudge(self.llm, self.prompts)
-        self.manipulation_verification = ManipulationVerificationJudge(
-            self.llm, self.prompts
-        )
-        self.balance_evaluation = BalanceEvaluationJudge(self.llm, self.prompts)
-        self.bias_detection = BiasDetectionStage(self.llm, self.prompts)
-
-        self.task_identification = TaskIdentificationStage(self.llm, self.prompts)
-        self.claim_citation_mapper = ClaimCitationMapper(self.llm, self.prompts)
-
-        # AI Output Auditor grounding spine (MB2). App-scoped, stateless, and
-        # isolated from the legacy engine pipeline above: the Attribution
-        # substrate and the two Layer-1 evaluators reuse the shared retrieval,
-        # NLI, embedding, and claim-extraction services. Nothing here is wired
-        # into the legacy orchestrator/registry/Decision Engine — the new
-        # pipeline is assembled in MB4.
+        # -- The AI Output Auditor pipeline --------------------------------- #
+        # Attribution is the grounding substrate; the seven evaluators derive
+        # from it (and from the shared services); the Decision Engine turns their
+        # metric results into a verdict; the orchestrator owns execution order.
         self.attribution = AttributionService(
-            settings,
-            self.retrieval,
-            self.nli,
-            self.embeddings,
-            self.claim_extraction,
+            settings, self.retrieval, self.nli, self.embeddings, self.claim_extraction
         )
         self.faithfulness = FaithfulnessEvaluator(settings)
         self.numeric_accuracy = NumericAccuracyEvaluator(settings)
-        # MB3 remaining metrics — all consume the MB2 grounding spine and reuse
-        # existing shared services (key-point extraction, salience, embeddings,
-        # deterministic validators). Still isolated from the legacy pipeline.
         self.coverage = CoverageEvaluator(
             settings, self.key_point_extraction, self.salience_assigner
         )
@@ -218,9 +120,6 @@ class ServiceContainer:
         self.conciseness = ConcisenessEvaluator(settings, self.embeddings)
         self.bias = BiasEvaluator(settings)
 
-        # MB4 — the layered Decision Engine and the Audit Orchestrator, the only
-        # component that owns evaluator execution order. Both are isolated from
-        # the legacy orchestrator/decision engine, which remain wired above.
         self.grounding_decision = GroundingDecisionEngine(settings)
         self.audit_orchestrator = AuditOrchestrator(
             settings,
@@ -238,22 +137,11 @@ class ServiceContainer:
 
         self._extractor = DefaultContentExtractor(settings)
         self.input_router: InputRouter = DefaultInputRouter(self._extractor)
-        # The Decision Engine shares the engines' §5.10 Confidence Estimator, so
-        # a confidence figure in the report is combined by the same arithmetic
-        # that produced the per-dimension figures it combines.
-        self.decision_engine = DecisionEngine(settings, confidence=self.confidence)
-
-        # Fail the boot rather than discover a missing dimension mid-audit: a
-        # report is defined over all eight, and seven would be a verdict built
-        # on an incomplete measurement set.
-        validate_registry()
-        EngineOrchestrator(build_engines(self.engine_services("startup"))).validate_plan()
 
         # ~575ms of profile loading, paid here instead of on the event loop
         # inside the first audit. See warm_language_detection().
         language_ready = warm_language_detection()
 
-        templates = self.prompts.available()
         logger.info(
             "service container ready",
             extra=bind(
@@ -261,8 +149,8 @@ class ServiceContainer:
                 llm_model=settings.llm.model,
                 llm_configured=settings.llm_configured,
                 embedding_model=settings.embedding.model,
-                embedding_cache=settings.embedding.cache_enabled,
-                prompt_templates=len(templates),
+                nli_model=settings.nli.model,
+                prompt_templates=len(self.prompts.available()),
                 language_detection=language_ready,
                 environment=settings.environment,
             ),
@@ -270,45 +158,17 @@ class ServiceContainer:
         self._warn_on_missing_prompts()
 
     def _warn_on_missing_prompts(self) -> None:
-        """Warn at startup for any extraction service whose prompt is absent.
+        """Warn at startup for any LLM stage whose prompt template is absent.
 
-        A missing prompt is a deployment mistake, and it surfaces as a degraded
-        trust dimension — which reads in the report as "we could not verify",
-        indistinguishable from a genuinely unverifiable input. Naming it at boot
-        turns a confusing verdict into an obvious fix.
-
-        Warns rather than raises: the specification is explicit that a provider
-        or prompt problem degrades a dimension (Document 4, §12), and the other
-        seven still have a verdict to deliver.
+        A missing prompt is a deployment mistake that surfaces as a degraded
+        metric — indistinguishable in the report from a genuinely inconclusive
+        input. Naming it at boot turns a confusing verdict into an obvious fix.
+        Warns rather than raises, matching the graceful-degradation policy.
         """
         stages = (
-            self.requirement_extraction,
             self.claim_extraction,
             self.key_point_extraction,
-            self.citation_extraction,
-            self.viewpoint_extraction,
-            self.claim_classifier,
-            self.claim_centrality,
-            self.requirement_classifier,
             self.salience_assigner,
-            self.category_severity,
-            self.source_classifier,
-            self.issue_classifier,
-            self.issue_severity,
-            self.applicability_classifier,
-            self.stance_contract,
-            self.claim_verification,
-            self.coverage_verification,
-            self.grounding_verification,
-            self.requirement_evaluation,
-            self.readability_review,
-            self.functional_repetition,
-            self.task_fitness,
-            self.manipulation_verification,
-            self.balance_evaluation,
-            self.bias_detection,
-            self.task_identification,
-            self.claim_citation_mapper,
         )
         missing = [
             f"{s.engine}/{s.stage}.{s.version}"
@@ -321,97 +181,16 @@ class ServiceContainer:
                 extra=bind(missing=missing, count=len(missing)),
             )
 
-    def engine_services(self, run_id: str) -> EngineServices:
-        """Build the run-scoped service bundle for one audit.
-
-        The evidence store and recommendation service are created fresh per run.
-        Their ids (``ev_1``, ``rec_1``, …) are unique within a run only, and the
-        report resolves references against them — reusing one across runs would
-        let one audit's evidence resolve inside another's report.
-
-        The embedding cache is deliberately *not* per-run: its entries are
-        content-addressed by model and text, so sharing them across runs is both
-        safe and the reason it exists.
-
-        Args:
-            run_id: The ``audit_id``, used to correlate logs.
-
-        Returns:
-            The services handed to every engine in this run.
-        """
-        return EngineServices(
-            settings=self.settings,
-            evidence_store=InMemoryEvidenceStore(run_id=run_id),
-            recommendation_service=DefaultRecommendationService(run_id=run_id),
-            confidence_service=self.confidence,
-            services={
-                "llm": self.llm,
-                "embedding": self.embeddings,
-                "retrieval": self.retrieval,
-                "prompts": self.prompts,
-                "validators": self.validators,
-                "segmenter": self.segmenter,
-                # LLM Extraction (§5.1). Each engine calls only the one its
-                # frozen pipeline names.
-                "requirement_extraction": self.requirement_extraction,
-                "claim_extraction": self.claim_extraction,
-                "key_point_extraction": self.key_point_extraction,
-                "citation_extraction": self.citation_extraction,
-                "viewpoint_extraction": self.viewpoint_extraction,
-                # Classification & Weighting (§5.2).
-                "claim_classifier": self.claim_classifier,
-                "claim_centrality": self.claim_centrality,
-                "requirement_classifier": self.requirement_classifier,
-                "salience_assigner": self.salience_assigner,
-                "category_severity": self.category_severity,
-                "source_classifier": self.source_classifier,
-                "issue_classifier": self.issue_classifier,
-                "issue_severity": self.issue_severity,
-                "applicability_classifier": self.applicability_classifier,
-                "stance_contract": self.stance_contract,
-                # Verification / Judge (§5.4).
-                "claim_verification": self.claim_verification,
-                "coverage_verification": self.coverage_verification,
-                "grounding_verification": self.grounding_verification,
-                "requirement_evaluation": self.requirement_evaluation,
-                "readability_review": self.readability_review,
-                "functional_repetition": self.functional_repetition,
-                "task_fitness": self.task_fitness,
-                "manipulation_verification": self.manipulation_verification,
-                "balance_evaluation": self.balance_evaluation,
-                "bias_detection": self.bias_detection,
-                # Engagement stage 2.
-                "task_identification": self.task_identification,
-                # Credibility stage 3.
-                "claim_citation_mapper": self.claim_citation_mapper,
-            },
-        )
-
-    def orchestrator(self, run_id: str) -> EngineOrchestrator:
-        """Build a run-scoped orchestrator with all eight engines.
-
-        Args:
-            run_id: The ``audit_id`` for this run.
-
-        Returns:
-            An orchestrator whose engines share this run's services.
-        """
-        return EngineOrchestrator(build_engines(self.engine_services(run_id)))
-
     async def verify_model(self) -> None:
         """Fail fast if the configured model is not one the provider will serve.
 
-        Providers retire models: ``qwen/qwen3-32b`` was served and then began
-        returning 404, which turned every audit into eight degraded dimensions
-        and an *Unable to Verify* report — a misconfiguration masquerading as a
-        content verdict. The honest place to catch it is startup, before the
-        first audit, with a message that names the models the key actually has.
+        Providers retire models: a wrong model id turns every LLM stage into a
+        degradation and the audit into an *Unable to Verify*. The honest place to
+        catch it is startup, with a message that names the models the key has.
 
-        Called from the app lifespan after the container is built. Skips
-        silently when availability cannot be determined (offline, or a provider
-        with no model endpoint): "cannot check" must never harden into a false
-        startup failure, and the run then degrades gracefully as before if the
-        model really is gone.
+        Skips silently when availability cannot be determined (offline, or a
+        provider with no model endpoint), so "cannot check" never hardens into a
+        false startup failure.
 
         Raises:
             ConfigurationError: The provider enumerated its models and the
@@ -438,12 +217,11 @@ class ServiceContainer:
         )
 
     async def warm_nli(self) -> bool:
-        """Load the NLI model at startup when configured to (AI Output Auditor).
+        """Load the NLI model at startup when configured to.
 
-        Called from the app lifespan. Gated on ``nli.warm_on_startup`` so a
-        deployment can defer the ~180MB load to first use. Non-fatal: a failed
-        load (offline, no cached model) leaves ``nli_ready`` False and the app
-        still boots, matching the graceful-degradation policy used elsewhere.
+        Gated on ``nli.warm_on_startup`` so a deployment can defer the ~180MB
+        load to first use. Non-fatal: a failed load (offline, no cached model)
+        leaves ``nli_ready`` False and the app still boots.
 
         Returns:
             True if the NLI model is ready after the call, else False.
@@ -462,12 +240,12 @@ class ServiceContainer:
         return ready
 
     async def health(self) -> dict[str, object]:
-        """Collect readiness facts for ``GET /health`` (Document 4, §7).
+        """Collect readiness facts for ``GET /health``.
 
         Returns:
             Provider identity, configuration state, provider reachability,
             whether the configured model is actually served, embedding-cache
-            effectiveness, and NLI-service readiness (AI Output Auditor, MB1).
+            effectiveness, and NLI-service readiness.
         """
         cache = self.embeddings.cache_stats
         models = await self.llm.available_models()
@@ -481,7 +259,6 @@ class ServiceContainer:
             "llm_configured": self.settings.llm_configured,
             "llm_reachable": await self.llm.health(),
             "llm_model_available": model_available,
-            "engines_registered": len(registered_dimensions()),
             "embedding_model": self.settings.embedding.model,
             "embedding_cache_enabled": self.settings.embedding.cache_enabled,
             "embedding_cache_hit_rate": round(cache.hit_rate, 4),
@@ -515,9 +292,9 @@ def build_container(settings: Settings | None = None) -> ServiceContainer:
         The ready container.
 
     Raises:
-        ConfigurationError: If configuration is invalid, the LLM provider is
-            unknown, or an engine is missing. All are startup failures by
-            design — better a failed boot than a wrong verdict.
+        ConfigurationError: If configuration is invalid or the LLM provider is
+            unknown. A startup failure by design — better a failed boot than a
+            wrong verdict.
     """
     resolved = settings or load_settings()
     configure_logging(level=resolved.log_level, fmt=resolved.log_format)

@@ -13,21 +13,15 @@ from __future__ import annotations
 
 from fastapi import Request
 
-from app.api.jobs import JobStore
 from app.app import ServiceContainer
 from app.core.config import Settings
 
-__all__ = ["get_container", "get_job_store", "get_settings_dep"]
+__all__ = ["get_container", "get_settings_dep"]
 
 
 def get_container(request: Request) -> ServiceContainer:
     """Return the application-scoped service container."""
     return request.app.state.container  # type: ignore[no-any-return]
-
-
-def get_job_store(request: Request) -> JobStore:
-    """Return the application-scoped audit job store."""
-    return request.app.state.jobs  # type: ignore[no-any-return]
 
 
 def get_settings_dep(request: Request) -> Settings:
