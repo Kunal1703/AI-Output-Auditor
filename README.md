@@ -25,8 +25,6 @@ Veritas audits one or more AI- or human-written **outputs** against a single **s
 
 ## 📸 Screenshots
 
-> _Add screenshots to `docs/images/` — the sections below are wired up and ready._
-
 ### Dashboard
 ![Dashboard](docs/images/dashboard.png)
 
